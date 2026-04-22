@@ -1,0 +1,31 @@
+Act as an Expert UI/UX Designer and React Developer. We need to overhaul the UI of our "Visual Neural Network Sandbox" to make it feel like a premium, native mobile app, fixing several layout bugs while preserving all existing Web Worker and ML logic.
+
+### 1. LAYOUT OVERHAUL (Mobile-First "App" Feel)
+* Abandon the single-column endless scroll. Implement a **Bottom Tab Navigation** (using Lucide-React icons) for mobile view, switching between three views:
+    * **Tab 1: Architect (Controls)** - Architecture, Hyperparameters, and Dataset selectors.
+    * **Tab 2: Brain (Visualizer)** - The Network SVG/Canvas showing the nodes and vibrating lines.
+    * **Tab 3: Output & Export** - The 2D Point Classifier graph, Training Stats, and a new "Deploy/Export" card.
+* On desktop (`md:` and above), fall back to a clean, multi-column dashboard.
+
+### 2. FIXING CLIPPING & OVERLAPS (Critical Bug Fixes)
+* **Header Fix:** The subtitle text ("Build, train, and watch an MLP...") is overlapping. Hide it entirely on mobile (`hidden sm:block`). Keep the header slim and sticky at the top, containing only the App Title and the "Train/Pause" button so it's always accessible. Make the Reset/Save buttons icon-only on mobile.
+* **Network Canvas Fix (Clipping):** The Input nodes ('x' and 'y') are currently bleeding off the left edge of the screen. You MUST add padding to the SVG/Canvas container. Ensure the mathematical calculation for node positions relies on the container's `clientWidth` and `clientHeight` MINUS a generous padding (e.g., 40px) so no node or label ever touches the edge of the screen.
+
+### 3. AESTHETICS & POLISH (Tailwind)
+* Use a modern, cohesive dark theme (e.g., Slate or Zinc color palettes).
+* Wrap sections in clean cards (`bg-slate-800/50 rounded-2xl border border-slate-700 backdrop-blur-md`).
+* Ensure all tap targets (sliders, buttons, dropdowns) are large enough for mobile thumbs (minimum `min-h-[44px]`).
+
+### 4. NEW FEATURE: "THE FINISHED PRODUCT" (Export & Deploy)
+* In "Tab 3" (or at the bottom of the Output section), add a new "Export & Use" UI card.
+* This section should explain to the user what they can do with this model. 
+* Include a code snippet block (styled like a mini code editor) showing how to use the exported `weights.json` in a real-world scenario. E.g., a simple vanilla JS function: 
+    `// Load your trained model`
+    `const model = await loadModel('weights.json');`
+    `const prediction = model.predict([0.5, 0.8]);`
+* Ensure the "Save" button allows downloading this exact `weights.json` file.
+
+### 5. RULES
+* **DO NOT** break or alter the underlying `NeuralNetwork.ts` or `worker.ts` math logic. 
+* **DO NOT** change the 1,000-parameter limit or the 120 epochs/sec performance.
+* Focus purely on wrapping the existing state and logic in this new, responsive, tabbed app shell.
