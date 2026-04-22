@@ -1,0 +1,268 @@
+import { useEffect, useRef, useState } from "react";
+import {
+  Send,
+  Bot,
+  User,
+  Pencil,
+  Check,
+  X,
+  Loader2,
+  Sparkles,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  corrected?: string;
+}
+
+interface Props {
+  modelLabel: string;
+  systemPrompt: string;
+  messages: ChatMessage[];
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  loading: boolean;
+  setLoading: React.Dispatch<React.SetStateAction<boolean>>;
+  onCorrection: () => void;
+}
+
+const SAMPLE_REPLIES = [
+  "Great question! Based on what I know, the answer involves a few moving parts. Let me break it down for you.",
+  "Hmm, that's an interesting one. I'd approach it by first considering the underlying assumptions, then iterating from there.",
+  "Sure — here's a quick way to think about it. The key insight is that small models can learn surprisingly complex behavior with the right data.",
+  "Absolutely. In short: start simple, measure, and only add complexity when the data demands it.",
+];
+
+export function ChatView({
+  modelLabel,
+  systemPrompt,
+  messages,
+  setMessages,
+  loading,
+  setLoading,
+  onCorrection,
+}: Props) {
+  const [input, setInput] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, loading]);
+
+  const send = () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    const userMsg: ChatMessage = {
+      id: `u-${Date.now()}`,
+      role: "user",
+      content: text,
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setInput("");
+    setLoading(true);
+    setTimeout(
+      () => {
+        const reply =
+          SAMPLE_REPLIES[Math.floor(Math.random() * SAMPLE_REPLIES.length)];
+        const aiMsg: ChatMessage = {
+          id: `a-${Date.now()}`,
+          role: "assistant",
+          content: reply,
+        };
+        setMessages((prev) => [...prev, aiMsg]);
+        setLoading(false);
+      },
+      900 + Math.random() * 700,
+    );
+  };
+
+  const startEdit = (m: ChatMessage) => {
+    setEditingId(m.id);
+    setEditValue(m.corrected ?? m.content);
+  };
+
+  const saveEdit = (id: string) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, corrected: editValue } : m)),
+    );
+    setEditingId(null);
+    onCorrection();
+  };
+
+  return (
+    <div className="rounded-2xl border border-slate-700 bg-slate-800/50 backdrop-blur-md flex flex-col h-[calc(100vh-220px)] md:h-[560px] overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700/80 bg-slate-900/40">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="size-8 rounded-lg bg-gradient-to-br from-sky-500/30 to-emerald-500/30 border border-sky-400/30 flex items-center justify-center shrink-0">
+            <Bot className="size-4 text-sky-300" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-slate-100 truncate">
+              {modelLabel}
+            </div>
+            <div className="text-[11px] text-slate-400 truncate">
+              {systemPrompt.slice(0, 60) || "No system prompt"}
+              {systemPrompt.length > 60 ? "…" : ""}
+            </div>
+          </div>
+        </div>
+        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 shrink-0">
+          on-device
+        </span>
+      </div>
+
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.length === 0 && (
+          <div className="h-full flex flex-col items-center justify-center text-center px-6 py-10">
+            <div className="size-12 rounded-2xl bg-gradient-to-br from-sky-500/20 to-emerald-500/20 border border-slate-700 flex items-center justify-center mb-3">
+              <Sparkles className="size-5 text-sky-300" />
+            </div>
+            <div className="text-sm font-semibold text-slate-100">
+              Start chatting to fine-tune
+            </div>
+            <div className="text-xs text-slate-400 mt-1 max-w-xs">
+              Send a message, then use "Correct this" on any reply to teach the
+              model. Your corrections become LoRA training data.
+            </div>
+          </div>
+        )}
+
+        {messages.map((m) => (
+          <div
+            key={m.id}
+            className={`flex gap-2.5 ${m.role === "user" ? "flex-row-reverse" : ""}`}
+          >
+            <div
+              className={`size-8 rounded-lg flex items-center justify-center shrink-0 ${
+                m.role === "user"
+                  ? "bg-sky-500/20 border border-sky-400/30"
+                  : "bg-slate-700/60 border border-slate-600"
+              }`}
+            >
+              {m.role === "user" ? (
+                <User className="size-4 text-sky-300" />
+              ) : (
+                <Bot className="size-4 text-slate-200" />
+              )}
+            </div>
+            <div
+              className={`max-w-[78%] space-y-1.5 ${m.role === "user" ? "items-end" : ""}`}
+            >
+              <div
+                className={`rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
+                  m.role === "user"
+                    ? "bg-sky-500/15 border border-sky-400/30 text-sky-50 rounded-tr-sm"
+                    : "bg-slate-900/70 border border-slate-700 text-slate-100 rounded-tl-sm"
+                }`}
+              >
+                {m.content}
+              </div>
+
+              {m.corrected && (
+                <div className="rounded-xl px-3 py-2 text-xs bg-emerald-500/10 border border-emerald-500/30 text-emerald-100">
+                  <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300 mb-1">
+                    <Check className="size-3" /> Your correction
+                  </div>
+                  {m.corrected}
+                </div>
+              )}
+
+              {m.role === "assistant" && editingId !== m.id && (
+                <button
+                  onClick={() => startEdit(m)}
+                  className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-sky-300 transition-colors min-h-[28px] px-1"
+                >
+                  <Pencil className="size-3" />
+                  {m.corrected ? "Edit correction" : "Correct this"}
+                </button>
+              )}
+
+              {editingId === m.id && (
+                <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-2 space-y-2">
+                  <textarea
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    rows={3}
+                    autoFocus
+                    placeholder="Type the correct response…"
+                    className="w-full text-sm bg-transparent text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none"
+                  />
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setEditingId(null)}
+                      className="h-8 gap-1 text-xs"
+                    >
+                      <X className="size-3.5" /> Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => saveEdit(m.id)}
+                      className="h-8 gap-1 text-xs"
+                    >
+                      <Check className="size-3.5" /> Save
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {loading && (
+          <div className="flex gap-2.5">
+            <div className="size-8 rounded-lg bg-slate-700/60 border border-slate-600 flex items-center justify-center">
+              <Bot className="size-4 text-slate-200" />
+            </div>
+            <div className="rounded-2xl rounded-tl-sm px-3.5 py-3 bg-slate-900/70 border border-slate-700 flex gap-1">
+              <span className="size-1.5 rounded-full bg-slate-400 animate-pulse" />
+              <span
+                className="size-1.5 rounded-full bg-slate-400 animate-pulse"
+                style={{ animationDelay: "150ms" }}
+              />
+              <span
+                className="size-1.5 rounded-full bg-slate-400 animate-pulse"
+                style={{ animationDelay: "300ms" }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-slate-700/80 bg-slate-900/40 p-3">
+        <div className="flex items-end gap-2">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            rows={1}
+            placeholder="Message your model…"
+            className="flex-1 min-h-[44px] max-h-32 rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40 resize-none"
+          />
+          <Button
+            onClick={send}
+            disabled={!input.trim() || loading}
+            className="min-h-[44px] min-w-[44px] rounded-xl gap-1.5"
+          >
+            {loading ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Send className="size-4" />
+            )}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}

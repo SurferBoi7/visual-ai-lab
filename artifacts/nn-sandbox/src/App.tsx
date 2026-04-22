@@ -13,6 +13,7 @@ import {
   SlidersHorizontal,
   Network,
   LineChart,
+  MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -27,7 +28,15 @@ import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/hooks/use-toast";
 import { NetworkCanvas } from "@/components/NetworkCanvas";
 import { DataView } from "@/components/DataView";
-import { ExportCard } from "@/components/ExportCard";
+import { SharingHub } from "@/components/SharingHub";
+import { ModeToggle, type AppMode } from "@/components/ModeToggle";
+import {
+  LLMArchitect,
+  MODELS,
+  type LLMConfig,
+} from "@/components/llm/LLMArchitect";
+import { ChatView, type ChatMessage } from "@/components/llm/ChatView";
+import { LLMStats } from "@/components/llm/LLMStats";
 import type { Activation, NetworkConfig, DataPoint } from "@/lib/nn";
 
 type DatasetKind = "spiral" | "circle" | "xor";
@@ -77,14 +86,36 @@ export default function App() {
   const { toast } = useToast();
   const workerRef = useRef<Worker | null>(null);
 
+  const [mode, setMode] = useState<AppMode>("mlp");
+
+  // ---- MLP state ----
   const [hidden, setHidden] = useState<number[]>([6, 4]);
   const [activation, setActivation] = useState<Activation>("tanh");
   const [learningRate, setLearningRate] = useState(0.05);
   const [dataset, setDataset] = useState<DatasetKind>("circle");
   const [playing, setPlaying] = useState(false);
   const [epochsPerSecond, setEpochsPerSecond] = useState(10);
-
   const [snap, setSnap] = useState<SnapshotMsg | null>(null);
+
+  // ---- LLM state ----
+  const [llmConfig, setLLMConfig] = useState<LLMConfig>({
+    baseModel: "smollm-135m",
+    systemPrompt:
+      "You are a friendly, concise assistant. Answer clearly and avoid jargon.",
+    temperature: 0.7,
+  });
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const correctionCount = useMemo(
+    () => messages.filter((m) => m.corrected).length,
+    [messages],
+  );
+  const llmModel = useMemo(
+    () =>
+      MODELS.find((m) => m.id === llmConfig.baseModel)?.label ?? "Base Model",
+    [llmConfig.baseModel],
+  );
+
   const [tab, setTab] = useState<TabKey>("brain");
 
   const layers = useMemo(() => [2, ...hidden, 1], [hidden]);
@@ -210,39 +241,81 @@ export default function App() {
   };
 
   const handleReset = () => {
-    reinit();
+    if (mode === "mlp") {
+      reinit();
+    } else {
+      setMessages([]);
+      toast({ title: "Conversation cleared" });
+    }
   };
 
   const handleSave = () => {
-    if (!snap) return;
-    const payload = {
-      architecture: { layers, activation },
-      learningRate,
-      epoch: snap.epoch,
-      loss: snap.loss,
-      accuracy: snap.accuracy,
-      weights: snap.weights,
-      biases: snap.biases,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `weights.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast({
-      title: "weights.json saved",
-      description: "Your trained model is ready to ship.",
-    });
+    if (mode === "mlp") {
+      if (!snap) return;
+      const payload = {
+        architecture: { layers, activation },
+        learningRate,
+        epoch: snap.epoch,
+        loss: snap.loss,
+        accuracy: snap.accuracy,
+        weights: snap.weights,
+        biases: snap.biases,
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `weights.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({
+        title: "weights.json saved",
+        description: "Your trained model is ready to ship.",
+      });
+    } else {
+      const payload = {
+        baseModel: llmConfig.baseModel,
+        systemPrompt: llmConfig.systemPrompt,
+        temperature: llmConfig.temperature,
+        loraRank: 8,
+        trainingPairs: messages
+          .filter((m) => m.corrected)
+          .map((m) => ({ original: m.content, corrected: m.corrected })),
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `adapter.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({
+        title: "adapter.json saved",
+        description: "LoRA fine-tune metadata exported.",
+      });
+    }
+  };
+
+  const handleModeChange = (m: AppMode) => {
+    if (m === mode) return;
+    setMode(m);
+    setTab("brain");
+    if (m === "llm" && playing) {
+      workerRef.current?.postMessage({ type: "pause" });
+      setPlaying(false);
+    }
   };
 
   const overBudget = estimatedParams > MAX_PARAMS;
+  const llmHasModel = messages.length > 0 || correctionCount > 0;
+  const playLabel = mode === "mlp" ? (playing ? "Pause" : "Train") : "Train";
 
-  // ---- Sub-views ----
-  const ArchitectView = (
+  // ===== MLP VIEWS =====
+  const MLPArchitect = (
     <div className="space-y-4">
       <Card className="p-5 space-y-4">
         <div className="flex items-center justify-between">
@@ -389,7 +462,7 @@ export default function App() {
     </div>
   );
 
-  const BrainView = (
+  const MLPBrain = (
     <Card className="p-4 sm:p-5">
       <div className="flex items-center justify-between mb-3 gap-3">
         <div className="min-w-0">
@@ -414,7 +487,7 @@ export default function App() {
     </Card>
   );
 
-  const OutputView = (
+  const MLPOutput = (
     <div className="space-y-4">
       <Card className="p-5">
         <div className="flex items-center justify-between mb-3 gap-3">
@@ -459,35 +532,80 @@ export default function App() {
         </div>
       </Card>
 
-      <ExportCard onDownload={handleSave} hasModel={!!snap} />
+      <SharingHub mode="mlp" onDownload={handleSave} hasModel={!!snap} />
     </div>
   );
 
+  // ===== LLM VIEWS =====
+  const LLMBrain = (
+    <ChatView
+      modelLabel={llmModel}
+      systemPrompt={llmConfig.systemPrompt}
+      messages={messages}
+      setMessages={setMessages}
+      loading={chatLoading}
+      setLoading={setChatLoading}
+      onCorrection={() =>
+        toast({
+          title: "Correction recorded",
+          description: "Added to your LoRA training set.",
+        })
+      }
+    />
+  );
+
+  const LLMOutput = (
+    <div className="space-y-4">
+      <LLMStats
+        modelLabel={llmModel}
+        messageCount={messages.length}
+        correctionCount={correctionCount}
+      />
+      <SharingHub mode="llm" onDownload={handleSave} hasModel={llmHasModel} />
+    </div>
+  );
+
+  // Active per-tab content
+  const ArchitectContent =
+    mode === "mlp" ? (
+      MLPArchitect
+    ) : (
+      <LLMArchitect config={llmConfig} onChange={setLLMConfig} />
+    );
+  const BrainContent = mode === "mlp" ? MLPBrain : LLMBrain;
+  const OutputContent = mode === "mlp" ? MLPOutput : LLMOutput;
+
   const tabs: { key: TabKey; label: string; icon: typeof Brain }[] = [
     { key: "architect", label: "Architect", icon: SlidersHorizontal },
-    { key: "brain", label: "Brain", icon: Network },
+    {
+      key: "brain",
+      label: mode === "mlp" ? "Brain" : "Chat",
+      icon: mode === "mlp" ? Network : MessageSquare,
+    },
     { key: "output", label: "Output", icon: LineChart },
   ];
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900 text-slate-100">
-      {/* Sticky slim header */}
+      {/* Sticky header */}
       <header className="sticky top-0 z-20 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md">
         <div className="px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="size-8 rounded-lg bg-gradient-to-br from-sky-500 to-emerald-500 flex items-center justify-center shrink-0">
               <Brain className="size-4 text-slate-900" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 hidden sm:block">
               <div className="text-sm font-semibold tracking-tight truncate">
-                Neural Network Sandbox
+                AI Sandbox
               </div>
               <div className="text-[11px] text-slate-400 hidden sm:block truncate">
-                Build, train, and watch an MLP learn — entirely in the browser.
+                Build, train, and ship tiny models — entirely in the browser.
               </div>
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
+            <ModeToggle mode={mode} onChange={handleModeChange} />
+            <div className="w-px h-6 bg-slate-800 mx-0.5 hidden sm:block" />
             <Button
               size="icon"
               variant="secondary"
@@ -524,90 +642,111 @@ export default function App() {
               <Save className="size-3.5" />
               Save
             </Button>
-            <Button
-              onClick={handlePlay}
-              className="gap-1.5 min-w-[96px] min-h-[40px] rounded-xl"
-            >
-              {playing ? (
-                <>
-                  <Pause className="size-4" />
-                  Pause
-                </>
-              ) : (
-                <>
-                  <Play className="size-4" />
-                  Train
-                </>
-              )}
-            </Button>
+            {mode === "mlp" && (
+              <Button
+                onClick={handlePlay}
+                className="gap-1.5 min-w-[88px] sm:min-w-[96px] min-h-[40px] rounded-xl"
+              >
+                {playing ? (
+                  <>
+                    <Pause className="size-4" />
+                    {playLabel}
+                  </>
+                ) : (
+                  <>
+                    <Play className="size-4" />
+                    {playLabel}
+                  </>
+                )}
+              </Button>
+            )}
           </div>
         </div>
       </header>
 
       {/* Mobile: tabbed view */}
       <main className="md:hidden px-3 pt-4 pb-28">
-        {tab === "architect" && ArchitectView}
-        {tab === "brain" && BrainView}
-        {tab === "output" && OutputView}
+        {tab === "architect" && ArchitectContent}
+        {tab === "brain" && BrainContent}
+        {tab === "output" && OutputContent}
       </main>
 
       {/* Desktop: dashboard */}
       <main className="hidden md:grid grid-cols-12 gap-4 p-4 lg:p-6">
-        <aside className="col-span-4 lg:col-span-3">{ArchitectView}</aside>
+        <aside className="col-span-4 lg:col-span-3">{ArchitectContent}</aside>
         <section className="col-span-8 lg:col-span-9 space-y-4">
-          {BrainView}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <div className="space-y-4">
-              <Card className="p-5">
-                <div className="flex items-center justify-between mb-3 gap-3">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-100">
-                      2D Point Classifier
+          {BrainContent}
+          {mode === "mlp" ? (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <div className="space-y-4">
+                <Card className="p-5">
+                  <div className="flex items-center justify-between mb-3 gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-100">
+                        2D Point Classifier
+                      </div>
+                      <div className="text-[11px] text-slate-400 truncate">
+                        The network learns to color the plane based on (x, y).
+                      </div>
                     </div>
-                    <div className="text-[11px] text-slate-400 truncate">
-                      The network learns to color the plane based on (x, y).
+                    <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                      <span className="flex items-center gap-1.5">
+                        <span className="size-2.5 rounded-full bg-sky-400" /> A
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="size-2.5 rounded-full bg-emerald-400" />{" "}
+                        B
+                      </span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 text-[11px] text-slate-400">
-                    <span className="flex items-center gap-1.5">
-                      <span className="size-2.5 rounded-full bg-sky-400" /> A
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="size-2.5 rounded-full bg-emerald-400" />{" "}
-                      B
+                  <div className="flex justify-center">
+                    <div className="w-full max-w-[380px] aspect-square">
+                      <ResponsiveDataView snap={snap} />
+                    </div>
+                  </div>
+                </Card>
+                <Card className="p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Activity className="size-4 text-emerald-400" />
+                    <span className="text-sm font-semibold text-slate-100">
+                      Training Stats
                     </span>
                   </div>
-                </div>
-                <div className="flex justify-center">
-                  <div className="w-full max-w-[380px] aspect-square">
-                    <ResponsiveDataView snap={snap} />
+                  <div className="grid grid-cols-3 gap-2">
+                    <Stat label="Epoch" value={snap?.epoch ?? 0} />
+                    <Stat
+                      label="Loss"
+                      value={snap ? snap.loss.toFixed(3) : "—"}
+                    />
+                    <Stat
+                      label="Acc"
+                      value={
+                        snap ? `${(snap.accuracy * 100).toFixed(0)}%` : "—"
+                      }
+                    />
                   </div>
-                </div>
-              </Card>
-              <Card className="p-5">
-                <div className="flex items-center gap-2 mb-3">
-                  <Activity className="size-4 text-emerald-400" />
-                  <span className="text-sm font-semibold text-slate-100">
-                    Training Stats
-                  </span>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <Stat label="Epoch" value={snap?.epoch ?? 0} />
-                  <Stat
-                    label="Loss"
-                    value={snap ? snap.loss.toFixed(3) : "—"}
-                  />
-                  <Stat
-                    label="Acc"
-                    value={
-                      snap ? `${(snap.accuracy * 100).toFixed(0)}%` : "—"
-                    }
-                  />
-                </div>
-              </Card>
+                </Card>
+              </div>
+              <SharingHub
+                mode="mlp"
+                onDownload={handleSave}
+                hasModel={!!snap}
+              />
             </div>
-            <ExportCard onDownload={handleSave} hasModel={!!snap} />
-          </div>
+          ) : (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <LLMStats
+                modelLabel={llmModel}
+                messageCount={messages.length}
+                correctionCount={correctionCount}
+              />
+              <SharingHub
+                mode="llm"
+                onDownload={handleSave}
+                hasModel={llmHasModel}
+              />
+            </div>
+          )}
         </section>
       </main>
 

@@ -1,0 +1,25 @@
+Act as an Expert full-stack engineer. We are doing a major feature expansion on our "Visual Neural Network Sandbox". We must KEEP all existing functionality (the mobile-first tabs, the custom MLP worker, the canvas, the 1000-parameter limit, the 2D graph). 
+
+We are adding two major features: A "Chatbot (LLM)" mode and an "Advanced Sharing Hub".
+
+### 1. THE MODE TOGGLE
+* Add a sleek toggle switch at the very top of the app (above the tabs or in the header) to switch between two modes: 
+  - Mode A: "Visual MLP" (The current app).
+  - Mode B: "Text LLM" (The new chatbot fine-tuner).
+* Ensure that the current state completely hides/shows the relevant UI based on this toggle.
+
+### 2. THE TEXT LLM UI (When Mode B is active)
+* **Architect Tab:** Change the controls to "Select Base Model" (e.g., SmolLM-135M, Gemma-2b-quantized) and "System Prompt". 
+* **Brain Tab (The Chat):** Replace the SVG canvas with a beautiful, modern Chat Interface. The user can type messages, and the AI responds. Add a "Correct this" button next to AI responses. Clicking it opens an input for the user to type the *correct* answer. (Mock the actual Transformers.js WebGPU loading/training logic for now with a `setTimeout` loading state, just build the UI).
+* **Output Tab:** Show LLM stats (Tokens per second, VRAM usage, LoRA Adapter size).
+
+### 3. THE ADVANCED SHARING HUB (Both Modes)
+* Overhaul the "Export & Use" card in the Output tab. Keep the existing `weights.json` download and the `inference.js` code block.
+* Add a "Publish to Cloud" button. When clicked, show a loading spinner, then reveal a mock "Shareable Link" (e.g., `ai-sandbox.com/model/xyz89`).
+* Add social sharing icon buttons (Lucide icons for Twitter/X, GitHub, and Copy Link).
+* Add a "Share as interactive widget" code block snippet (an iframe embed code).
+
+### RULES
+* DO NOT break the existing `NeuralNetwork.ts` or `worker.ts` logic. Ensure the React Flow/SVG canvas still respects the 56px padding ResizeObserver when Mode A is active.
+* Maintain the Slate dark theme and 44px minimum tap targets.
+* For the LLM side, build the complete UI/UX first before we wire up the heavy WebGPU libraries.
