@@ -1,22 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  Send,
-  Bot,
-  User,
-  Pencil,
-  Check,
-  X,
-  Loader2,
-  Sparkles,
-  Wand2,
-} from "lucide-react";
+import { Send, Bot, User, Loader2, Sparkles, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  corrected?: string;
 }
 
 interface Props {
@@ -25,7 +14,6 @@ interface Props {
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   loading: boolean;
   setLoading: React.Dispatch<React.SetStateAction<boolean>>;
-  onCorrection: () => void;
   generate: (seed: string) => Promise<string>;
   liveSample: string;
   epoch: number;
@@ -39,7 +27,6 @@ export function ChatView({
   setMessages,
   loading,
   setLoading,
-  onCorrection,
   generate,
   liveSample,
   epoch,
@@ -47,8 +34,6 @@ export function ChatView({
   isTraining,
 }: Props) {
   const [input, setInput] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -78,19 +63,6 @@ export function ChatView({
     } finally {
       setLoading(false);
     }
-  };
-
-  const startEdit = (m: ChatMessage) => {
-    setEditingId(m.id);
-    setEditValue(m.corrected ?? m.content);
-  };
-
-  const saveEdit = (id: string) => {
-    setMessages((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, corrected: editValue } : m)),
-    );
-    setEditingId(null);
-    onCorrection();
   };
 
   return (
@@ -170,7 +142,7 @@ export function ChatView({
                 <Bot className="size-4 text-slate-200" />
               )}
             </div>
-            <div className={`max-w-[78%] space-y-1.5`}>
+            <div className={`max-w-[78%]`}>
               <div
                 className={`rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed font-mono ${
                   m.role === "user"
@@ -180,55 +152,6 @@ export function ChatView({
               >
                 {m.content}
               </div>
-
-              {m.corrected && (
-                <div className="rounded-xl px-3 py-2 text-xs bg-emerald-500/10 border border-emerald-500/30 text-emerald-100 font-mono">
-                  <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300 mb-1 not-italic">
-                    <Check className="size-3" /> Your correction
-                  </div>
-                  {m.corrected}
-                </div>
-              )}
-
-              {m.role === "assistant" && editingId !== m.id && (
-                <button
-                  onClick={() => startEdit(m)}
-                  className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-sky-300 transition-colors min-h-[28px] px-1"
-                >
-                  <Pencil className="size-3" />
-                  {m.corrected ? "Edit correction" : "Correct this"}
-                </button>
-              )}
-
-              {editingId === m.id && (
-                <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-2 space-y-2">
-                  <textarea
-                    value={editValue}
-                    onChange={(e) => setEditValue(e.target.value)}
-                    rows={3}
-                    autoFocus
-                    placeholder="Type the correct response…"
-                    className="w-full text-sm bg-transparent text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none font-mono"
-                  />
-                  <div className="flex justify-end gap-1">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setEditingId(null)}
-                      className="h-8 gap-1 text-xs"
-                    >
-                      <X className="size-3.5" /> Cancel
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => saveEdit(m.id)}
-                      className="h-8 gap-1 text-xs"
-                    >
-                      <Check className="size-3.5" /> Save
-                    </Button>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         ))}

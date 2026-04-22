@@ -39,6 +39,13 @@ interface DatasetMsg {
   type: "dataset";
   dataset: DatasetKind;
 }
+interface LoadWeightsMsg {
+  type: "loadWeights";
+  config: NetworkConfig;
+  dataset: DatasetKind;
+  weights: number[][][];
+  biases: number[][];
+}
 
 type IncomingMsg =
   | InitMsg
@@ -47,7 +54,8 @@ type IncomingMsg =
   | StepMsg
   | ResetMsg
   | ConfigMsg
-  | DatasetMsg;
+  | DatasetMsg
+  | LoadWeightsMsg;
 
 let net: NeuralNetwork | null = null;
 let data: DataPoint[] = [];
@@ -186,6 +194,20 @@ self.onmessage = (e: MessageEvent<IncomingMsg>) => {
     case "step": {
       if (!net) return;
       for (let i = 0; i < msg.epochs; i++) trainOneEpoch();
+      postSnapshot();
+      break;
+    }
+    case "loadWeights": {
+      stopLoop();
+      dataset = msg.dataset;
+      data = buildDataset(dataset);
+      net = new NeuralNetwork(msg.config);
+      // Overwrite freshly-randomised parameters with the saved ones.
+      net.weights = msg.weights.map((m) => m.map((r) => r.slice()));
+      net.biases = msg.biases.map((b) => b.slice());
+      epoch = 0;
+      lastLoss = 0;
+      lastAcc = 0;
       postSnapshot();
       break;
     }

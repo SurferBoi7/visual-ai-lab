@@ -14,6 +14,7 @@ import {
   Network,
   LineChart,
   MessageSquare,
+  Library as LibraryIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -36,10 +37,19 @@ import {
 } from "@/components/llm/LLMArchitect";
 import { ChatView, type ChatMessage } from "@/components/llm/ChatView";
 import { LLMStats } from "@/components/llm/LLMStats";
+import { SaveModal } from "@/components/SaveModal";
+import { LibraryView } from "@/components/LibraryView";
+import {
+  saveModel,
+  makeId,
+  type SavedModel,
+  type MLPWeights,
+  type CharLMWeights,
+} from "@/lib/storage";
 import type { Activation, NetworkConfig, DataPoint } from "@/lib/nn";
 
 type DatasetKind = "spiral" | "circle" | "xor";
-type TabKey = "architect" | "brain" | "output";
+type TabKey = "architect" | "brain" | "output" | "library";
 
 interface SnapshotMsg {
   type: "snapshot";
@@ -91,6 +101,25 @@ function estimateLLMParams(
 
 function uniqueChars(s: string): number {
   return new Set(s).size;
+}
+
+function slug(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "model"
+  );
+}
+
+function defaultSaveName(
+  mode: AppMode,
+  modeLabel: string,
+  epoch: number,
+): string {
+  const tag = mode === "mlp" ? "MLP" : "Char-LM";
+  return `${tag} · ${modeLabel} · ep ${epoch}`;
 }
 
 function Card({
@@ -151,12 +180,10 @@ export default function App() {
   const [llmEpochsPerSecond, setLLMEpochsPerSecond] = useState(20);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
-  const correctionCount = useMemo(
-    () => messages.filter((m) => m.corrected).length,
-    [messages],
-  );
 
   const [tab, setTab] = useState<TabKey>("brain");
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [libraryRefresh, setLibraryRefresh] = useState(0);
 
   const layers = useMemo(() => [2, ...hidden, 1], [hidden]);
   const estimatedMLPParams = useMemo(
@@ -421,61 +448,179 @@ export default function App() {
     [llmConfig.temperature],
   );
 
-  const handleSave = async () => {
-    if (mode === "mlp") {
-      if (!snap) return;
-      const payload = {
-        kind: "mlp",
-        architecture: { layers, activation },
-        learningRate,
-        epoch: snap.epoch,
-        loss: snap.loss,
-        accuracy: snap.accuracy,
-        weights: snap.weights,
-        biases: snap.biases,
-      };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `weights.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast({
-        title: "weights.json saved",
-        description: "Your trained model is ready to ship.",
-      });
-    } else {
-      // Ask the worker to dump the trained char-LM weights.
+  const requestLLMExport = useCallback((): Promise<CharLMWeights | null> => {
+    return new Promise((resolve) => {
       const worker = textWorkerRef.current;
-      if (!worker) return;
-      const id = `e-${Date.now()}`;
-      const json = await new Promise<string>((resolve) => {
-        pendingGenRef.current.set(id, resolve);
-        worker.postMessage({ type: "exportModel", id });
+      if (!worker) return resolve(null);
+      const id = `e-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      pendingGenRef.current.set(id, (json: string) => {
+        if (!json || json === "null") return resolve(null);
+        try {
+          const parsed = JSON.parse(json);
+          // Tag the saved model with the live corpus + temperature so loads
+          // restore a fully-usable chat session.
+          parsed.corpus = llmConfig.corpus;
+          parsed.temperature = llmConfig.temperature;
+          resolve(parsed as CharLMWeights & { corpus: string });
+        } catch {
+          resolve(null);
+        }
       });
-      if (!json || json === "null") {
-        toast({
-          title: "Nothing to export",
-          description: "Train the model first.",
-        });
+      worker.postMessage({ type: "exportModel", id });
+    });
+  }, [llmConfig.corpus, llmConfig.temperature]);
+
+  const downloadJSON = (filename: string, payload: unknown) => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const buildMLPPayload = (): MLPWeights | null => {
+    if (!snap) return null;
+    return {
+      layers,
+      activation,
+      weights: snap.weights,
+      biases: snap.biases,
+      learningRate,
+    };
+  };
+
+  const handleOpenSave = () => {
+    const ready = mode === "mlp" ? !!snap : textSnap.epoch > 0;
+    if (!ready) {
+      toast({
+        title: "Train first",
+        description: "Run a few epochs before saving.",
+      });
+      return;
+    }
+    setSaveOpen(true);
+  };
+
+  const handleExportFile = async (name: string) => {
+    if (mode === "mlp") {
+      const w = buildMLPPayload();
+      if (!w) return;
+      downloadJSON(`${slug(name)}.json`, { kind: "mlp", name, ...w });
+      toast({ title: "File exported", description: `${name}.json saved.` });
+    } else {
+      const w = await requestLLMExport();
+      if (!w) {
+        toast({ title: "Nothing to export", description: "Train first." });
         return;
       }
-      const pretty = JSON.stringify(JSON.parse(json), null, 2);
-      const blob = new Blob([pretty], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `char-lm.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast({
-        title: "char-lm.json saved",
-        description: "Vocabulary, config, and weights exported.",
-      });
+      downloadJSON(`${slug(name)}.json`, { kind: "char-lm", name, ...w });
+      toast({ title: "File exported", description: `${name}.json saved.` });
     }
+  };
+
+  const handleSaveToLibrary = async (name: string) => {
+    if (mode === "mlp") {
+      const w = buildMLPPayload();
+      if (!w || !snap) return;
+      const model: SavedModel = {
+        id: makeId(),
+        name,
+        type: "MLP",
+        date: Date.now(),
+        paramsCount: snap.paramCount,
+        loss: snap.loss,
+        epoch: snap.epoch,
+        weights: w,
+      };
+      await saveModel(model);
+    } else {
+      const w = await requestLLMExport();
+      if (!w) {
+        toast({ title: "Nothing to save", description: "Train first." });
+        return;
+      }
+      const model: SavedModel = {
+        id: makeId(),
+        name,
+        type: "Char-LM",
+        date: Date.now(),
+        paramsCount: textSnap.paramCount,
+        loss: textSnap.loss,
+        epoch: textSnap.epoch,
+        weights: w,
+      };
+      await saveModel(model);
+    }
+    setLibraryRefresh((v) => v + 1);
+    toast({
+      title: "Saved to Library",
+      description: `${name} is in your model library.`,
+    });
+  };
+
+  const handleLoadModel = (model: SavedModel) => {
+    // Always pause both training loops first so the new weights land cleanly.
+    if (playing) {
+      workerRef.current?.postMessage({ type: "pause" });
+      setPlaying(false);
+    }
+    if (llmPlaying) {
+      textWorkerRef.current?.postMessage({ type: "pause" });
+      setLLMPlaying(false);
+    }
+
+    if (model.type === "MLP") {
+      const w = model.weights as MLPWeights;
+      const nextHidden = w.layers.slice(1, -1);
+      setHidden(nextHidden);
+      setActivation(w.activation as Activation);
+      setLearningRate(w.learningRate);
+      const config: NetworkConfig = {
+        inputSize: w.layers[0],
+        hiddenLayers: nextHidden,
+        outputSize: w.layers[w.layers.length - 1],
+        activation: w.activation as Activation,
+        learningRate: w.learningRate,
+      };
+      workerRef.current?.postMessage({
+        type: "loadWeights",
+        config,
+        dataset,
+        weights: w.weights,
+        biases: w.biases,
+      });
+      setMode("mlp");
+    } else {
+      const w = model.weights as CharLMWeights;
+      // Mirror the saved config into the LLM panel UI so the architect tab
+      // matches what the worker is now serving.
+      setLLMConfig({
+        corpus: w.corpus ?? w.vocab.join(""),
+        contextSize: w.config.contextSize,
+        hiddenSize: w.config.hiddenSize,
+        learningRate: w.config.learningRate,
+        temperature: typeof w.temperature === "number" ? w.temperature : 0.6,
+      });
+      textWorkerRef.current?.postMessage({
+        type: "loadWeights",
+        payload: {
+          ...w,
+          epoch: model.epoch,
+          loss: model.loss,
+        },
+      });
+      setMessages([]);
+      setMode("llm");
+    }
+    setTab("brain");
+    toast({
+      title: "Model loaded",
+      description: `${model.name} restored to the ${model.type} workspace.`,
+    });
   };
 
   const handleModeChange = (m: AppMode) => {
@@ -717,7 +862,7 @@ export default function App() {
         </div>
       </Card>
 
-      <SharingHub mode="mlp" onDownload={handleSave} hasModel={!!snap} />
+      <SharingHub mode="mlp" onDownload={handleOpenSave} hasModel={!!snap} />
     </div>
   );
 
@@ -766,12 +911,6 @@ export default function App() {
       setMessages={setMessages}
       loading={chatLoading}
       setLoading={setChatLoading}
-      onCorrection={() =>
-        toast({
-          title: "Correction recorded",
-          description: "Added to your fine-tune set.",
-        })
-      }
       generate={generateFromWorker}
       liveSample={textSnap.sample}
       epoch={textSnap.epoch}
@@ -793,10 +932,9 @@ export default function App() {
         tokensPerSecond={textSnap.tokensPerSecond}
         trainedSamples={textSnap.trainedSamples}
         messageCount={messages.length}
-        correctionCount={correctionCount}
         liveSample={textSnap.sample}
       />
-      <SharingHub mode="llm" onDownload={handleSave} hasModel={llmHasModel} />
+      <SharingHub mode="llm" onDownload={handleOpenSave} hasModel={llmHasModel} />
     </div>
   );
 
@@ -812,7 +950,17 @@ export default function App() {
       icon: mode === "mlp" ? Network : MessageSquare,
     },
     { key: "output", label: "Output", icon: LineChart },
+    { key: "library", label: "Library", icon: LibraryIcon },
   ];
+  const tabIndex = tabs.findIndex((t) => t.key === tab);
+
+  const LibraryContent = (
+    <LibraryView
+      refreshKey={libraryRefresh}
+      onLoad={handleLoadModel}
+      onDeleted={() => setLibraryRefresh((v) => v + 1)}
+    />
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900 text-slate-100">
@@ -846,7 +994,7 @@ export default function App() {
             <Button
               size="icon"
               variant="secondary"
-              onClick={handleSave}
+              onClick={handleOpenSave}
               aria-label="Save"
               className="sm:hidden size-10 rounded-xl"
             >
@@ -864,7 +1012,7 @@ export default function App() {
             <Button
               size="sm"
               variant="secondary"
-              onClick={handleSave}
+              onClick={handleOpenSave}
               className="hidden sm:inline-flex gap-1.5 min-h-[40px] rounded-xl"
             >
               <Save className="size-3.5" />
@@ -894,10 +1042,14 @@ export default function App() {
         {tab === "architect" && ArchitectContent}
         {tab === "brain" && BrainContent}
         {tab === "output" && OutputContent}
+        {tab === "library" && LibraryContent}
       </main>
 
       <main className="hidden md:grid grid-cols-12 gap-4 p-4 lg:p-6">
-        <aside className="col-span-4 lg:col-span-3">{ArchitectContent}</aside>
+        <aside className="col-span-4 lg:col-span-3 space-y-4">
+          {ArchitectContent}
+          {LibraryContent}
+        </aside>
         <section className="col-span-8 lg:col-span-9 space-y-4">
           {BrainContent}
           {mode === "mlp" ? (
@@ -953,7 +1105,7 @@ export default function App() {
               </div>
               <SharingHub
                 mode="mlp"
-                onDownload={handleSave}
+                onDownload={handleOpenSave}
                 hasModel={!!snap}
               />
             </div>
@@ -970,12 +1122,11 @@ export default function App() {
                 tokensPerSecond={textSnap.tokensPerSecond}
                 trainedSamples={textSnap.trainedSamples}
                 messageCount={messages.length}
-                correctionCount={correctionCount}
                 liveSample={textSnap.sample}
               />
               <SharingHub
                 mode="llm"
-                onDownload={handleSave}
+                onDownload={handleOpenSave}
                 hasModel={llmHasModel}
               />
             </div>
@@ -984,7 +1135,7 @@ export default function App() {
       </main>
 
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-20 border-t border-slate-800 bg-slate-950/90 backdrop-blur-lg">
-        <div className="grid grid-cols-3">
+        <div className="grid grid-cols-4">
           {tabs.map((t) => {
             const Icon = t.icon;
             const active = tab === t.key;
@@ -1011,16 +1162,25 @@ export default function App() {
         <div
           className="absolute top-0 h-0.5 bg-sky-400 transition-all duration-300"
           style={{
-            width: "33.333%",
-            left:
-              tab === "architect"
-                ? "0%"
-                : tab === "brain"
-                  ? "33.333%"
-                  : "66.666%",
+            width: "25%",
+            left: `${Math.max(0, tabIndex) * 25}%`,
           }}
         />
       </nav>
+
+      <SaveModal
+        open={saveOpen}
+        defaultName={defaultSaveName(
+          mode,
+          mode === "mlp" ? dataset : llmModelLabel,
+          mode === "mlp" ? snap?.epoch ?? 0 : textSnap.epoch,
+        )}
+        modeLabel={mode === "mlp" ? "MLP Classifier" : "Char-level LM"}
+        hasModel={mode === "mlp" ? !!snap : textSnap.epoch > 0}
+        onClose={() => setSaveOpen(false)}
+        onSaveToLibrary={handleSaveToLibrary}
+        onExportFile={handleExportFile}
+      />
 
       <Toaster />
     </div>

@@ -1,0 +1,32 @@
+Act as a Senior React Developer. We are making two critical updates to our "Visual Neural Network Sandbox": removing legacy UI from the Chat tab, and implementing a permanent "Model Library" using the browser's native IndexedDB.
+
+### 1. CLEAN UP TEXT LLM UI
+* **Remove RLHF Elements:** In Mode B (Text LLM), completely remove the "Correct this" inline editor from the Chat tab.
+* **Clean up Telemetry:** In the Output tab, remove the "LoRA Adapter" metric, as it does not apply to our char-level model. Keep tokens/sec, memory, vocab, epoch, and loss.
+
+### 2. THE STORAGE ENGINE (IndexedDB)
+* Create a new utility file (e.g., `storage.ts`).
+* Write native TypeScript functions to interact with the browser's `IndexedDB`. We need:
+  - `saveModel(model: SavedModel)`
+  - `getModels(): Promise<SavedModel[]>`
+  - `loadModel(id: string): Promise<SavedModel>`
+  - `deleteModel(id: string)`
+* A `SavedModel` object should include: `id` (timestamp/uuid), `name`, `type` ('MLP' or 'Char-LM'), `date`, `paramsCount`, `loss`, and the raw `weights` object.
+
+### 3. THE "LIBRARY" UI
+* Add a 4th tab to our bottom navigation called **"Library"** (use a Lucide icon like `BookMarked` or `Library`).
+* **The Library View:** Display a clean, responsive list/grid of all saved models. 
+  - Each card should show the model's name, type (with a colored badge: Blue for MLP, Emerald for LLM), date, and loss.
+  - Each card needs a **"Load"** button and a **"Delete"** (Trash icon) button.
+* When a user clicks "Load", the app should automatically switch the Mode Toggle to the correct mode (MLP or LLM), inject the weights/architecture into the respective Web Worker, and take the user to the Architect/Brain tab.
+
+### 4. UPDATING THE "SAVE" FLOW
+* Change the behavior of the top "Save" button. 
+* Instead of immediately downloading a JSON file, clicking Save should open a sleek, centered Modal.
+* **The Save Modal:** Include a text input for the user to name their model (e.g., "XOR Master" or "Shakespeare Bot"). 
+* Add two buttons in the modal: "Save to Library" (writes to IndexedDB and closes) and "Export as File" (keeps the old JSON download behavior).
+
+### RULES
+* DO NOT alter the `NeuralNetwork.ts` or `text.worker.ts` math logic.
+* Ensure loading a model cleanly pauses any currently running training loop before injecting the new weights.
+* Maintain the Slate dark theme and responsive padding.

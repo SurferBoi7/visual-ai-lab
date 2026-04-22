@@ -178,6 +178,47 @@ self.onmessage = (e: MessageEvent) => {
       postMessage({ type: "generation", id: msg.id, text });
       break;
     }
+    case "loadWeights": {
+      pause();
+      const w = msg.payload;
+      if (!w || !w.config || !w.weights || !w.vocab) break;
+      // Rebuild the corpus context: prefer the saved corpus if present so that
+      // generation seeds work; otherwise fall back to the vocab characters.
+      const restoredCorpus =
+        typeof w.corpus === "string" && w.corpus.length > 0
+          ? w.corpus
+          : (w.vocab as string[]).join("");
+      corpus = restoredCorpus;
+      vocab = w.vocab as string[];
+      stoi = {};
+      for (let i = 0; i < vocab.length; i++) stoi[vocab[i]] = i;
+      const wins = makeWindows(corpus, stoi, w.config.contextSize);
+      inputs = wins.inputs;
+      targets = wins.targets;
+      net = new TextNetwork({
+        vocabSize: w.config.vocabSize,
+        contextSize: w.config.contextSize,
+        hiddenSize: w.config.hiddenSize,
+        learningRate: w.config.learningRate,
+      });
+      // Overwrite freshly-randomised parameters with the saved ones.
+      for (let j = 0; j < net.W1.length; j++) {
+        net.W1[j] = Float32Array.from(w.weights.W1[j]);
+      }
+      net.b1 = Float32Array.from(w.weights.b1);
+      for (let i = 0; i < net.W2.length; i++) {
+        net.W2[i] = Float32Array.from(w.weights.W2[i]);
+      }
+      net.b2 = Float32Array.from(w.weights.b2);
+      if (typeof w.temperature === "number") temperature = w.temperature;
+      epoch = typeof w.epoch === "number" ? w.epoch : 0;
+      lossEMA = typeof w.loss === "number" ? w.loss : 0;
+      trainedSamples = 0;
+      trainStartedAt = 0;
+      shuffleOrder();
+      emitSnapshot();
+      break;
+    }
     case "exportModel": {
       if (!net) {
         postMessage({ type: "exportModel", id: msg.id, payload: null });

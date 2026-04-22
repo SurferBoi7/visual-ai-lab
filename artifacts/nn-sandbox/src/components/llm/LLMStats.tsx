@@ -1,4 +1,4 @@
-import { Activity, Cpu, HardDrive, Zap, BookOpen } from "lucide-react";
+import { Activity, Cpu, Zap, BookOpen } from "lucide-react";
 
 interface Props {
   modelLabel: string;
@@ -11,7 +11,6 @@ interface Props {
   tokensPerSecond: number;
   trainedSamples: number;
   messageCount: number;
-  correctionCount: number;
   liveSample: string;
 }
 
@@ -42,11 +41,9 @@ export function LLMStats({
   tokensPerSecond,
   trainedSamples,
   messageCount,
-  correctionCount,
   liveSample,
 }: Props) {
   const memKB = (paramCount * 4) / 1024;
-  const adapterKB = correctionCount * 0.4;
 
   return (
     <div className="space-y-4">
@@ -75,12 +72,6 @@ export function LLMStats({
             label="Memory"
             value={`${memKB.toFixed(1)} KB`}
             sub={`${paramCount.toLocaleString()} params`}
-          />
-          <Metric
-            icon={<HardDrive className="size-3.5 text-emerald-400" />}
-            label="LoRA Adapter"
-            value={`${adapterKB.toFixed(1)} KB`}
-            sub={`${correctionCount} corrections`}
           />
           <Metric
             icon={<BookOpen className="size-3.5 text-fuchsia-400" />}
@@ -114,18 +105,6 @@ export function LLMStats({
             <span className="tabular-nums text-slate-200">
               {messageCount} messages
             </span>
-          </div>
-          <div className="flex justify-between text-xs">
-            <span className="text-slate-400">Fine-tune signal</span>
-            <span className="tabular-nums text-emerald-300">
-              {correctionCount} pairs
-            </span>
-          </div>
-          <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-sky-500 to-emerald-500 transition-all duration-500"
-              style={{ width: `${Math.min(100, correctionCount * 10)}%` }}
-            />
           </div>
         </div>
       </Card>
