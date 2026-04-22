@@ -1,0 +1,21 @@
+Act as a Senior ML Engineer. We need to replace the "Mocked" LLM UI in Mode B with a REAL, from-scratch text-generating neural network. We will build a "Character-Level Language Model" using pure TypeScript in our Web Worker.
+
+### 1. THE TEXT ENGINE (Pure TypeScript)
+* Create a simple text encoder/tokenizer. It should scan a small training text, extract all unique characters to build a vocabulary, and map characters to integers (and vice versa).
+* Update our NeuralNetwork class (or create a `TextNetwork` class) to accept an array of integers (the context window, e.g., the last 3 characters) and output an array representing the probabilities of the next character.
+* **The Math:** The output layer should use a Softmax activation function so we get a probability distribution of the next predicted letter.
+
+### 2. THE TRAINING DATA
+* Hardcode a small training dataset for it to learn from. Use something repetitive and simple like: 
+  `"hello world. hello friend. how are you? i am good. i am a bot."`
+* The Worker should slice this text into overlapping "windows" (e.g., if window size is 3, input `hel` -> target `l`, input `ell` -> target `o`).
+
+### 3. THE UI & VISUALIZATION (Mode B)
+* **Architect Tab:** Let the user set the "Context Window Size" (how many letters it looks at) and the number of Neurons. 
+* **Training View:** Instead of just a progress bar, show a "Live Generation" box. Every few seconds during training, pause, feed it a seed letter (like "h"), and ask it to generate 20 characters. The user should visibly see it start by outputting random gibberish (e.g., "h xqz p") and slowly learn to spell real words ("h ello wo").
+* **Chat Tab:** When the user types a prompt and hits send, the trained network must actually run inference. It takes the last few letters of the user's prompt and generates the next 50 characters letter-by-letter.
+
+### RULES
+* NO external libraries. All forward/backward passes and sequence generation must happen in pure TypeScript.
+* Ensure the training happens inside the Web Worker so the UI doesn't freeze.
+* Keep the parameters small (under 5,000) so it trains fast in the browser.

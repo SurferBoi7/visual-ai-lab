@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Play,
   Pause,
@@ -32,7 +32,6 @@ import { SharingHub } from "@/components/SharingHub";
 import { ModeToggle, type AppMode } from "@/components/ModeToggle";
 import {
   LLMArchitect,
-  MODELS,
   type LLMConfig,
 } from "@/components/llm/LLMArchitect";
 import { ChatView, type ChatMessage } from "@/components/llm/ChatView";
@@ -56,14 +55,42 @@ interface SnapshotMsg {
   gridRes: number;
 }
 
-const MAX_PARAMS = 1000;
+interface TextSnapshot {
+  epoch: number;
+  loss: number;
+  paramCount: number;
+  vocabSize: number;
+  contextSize: number;
+  hiddenSize: number;
+  sample: string;
+  tokensPerSecond: number;
+  trainedSamples: number;
+}
 
-function estimateParams(layers: number[]): number {
+const MAX_PARAMS_MLP = 1000;
+const MAX_PARAMS_LLM = 5000;
+
+const DEFAULT_CORPUS =
+  "hello world. hello friend. how are you? i am good. i am a bot. i love you. you are my friend. how do you do? hello world. how are you doing today? i am a friendly bot. ";
+
+function estimateMLPParams(layers: number[]): number {
   let p = 0;
   for (let i = 1; i < layers.length; i++) {
     p += layers[i - 1] * layers[i] + layers[i];
   }
   return p;
+}
+
+function estimateLLMParams(
+  vocab: number,
+  ctx: number,
+  hidden: number,
+): number {
+  return vocab * ctx * hidden + hidden + hidden * vocab + vocab;
+}
+
+function uniqueChars(s: string): number {
+  return new Set(s).size;
 }
 
 function Card({
@@ -85,6 +112,10 @@ function Card({
 export default function App() {
   const { toast } = useToast();
   const workerRef = useRef<Worker | null>(null);
+  const textWorkerRef = useRef<Worker | null>(null);
+  const pendingGenRef = useRef<
+    Map<string, (text: string) => void>
+  >(new Map());
 
   const [mode, setMode] = useState<AppMode>("mlp");
 
@@ -99,28 +130,50 @@ export default function App() {
 
   // ---- LLM state ----
   const [llmConfig, setLLMConfig] = useState<LLMConfig>({
-    baseModel: "smollm-135m",
-    systemPrompt:
-      "You are a friendly, concise assistant. Answer clearly and avoid jargon.",
-    temperature: 0.7,
+    corpus: DEFAULT_CORPUS,
+    contextSize: 3,
+    hiddenSize: 24,
+    learningRate: 0.1,
+    temperature: 0.6,
   });
+  const [textSnap, setTextSnap] = useState<TextSnapshot>({
+    epoch: 0,
+    loss: 0,
+    paramCount: 0,
+    vocabSize: uniqueChars(DEFAULT_CORPUS),
+    contextSize: 3,
+    hiddenSize: 24,
+    sample: "",
+    tokensPerSecond: 0,
+    trainedSamples: 0,
+  });
+  const [llmPlaying, setLLMPlaying] = useState(false);
+  const [llmEpochsPerSecond, setLLMEpochsPerSecond] = useState(20);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const correctionCount = useMemo(
     () => messages.filter((m) => m.corrected).length,
     [messages],
   );
-  const llmModel = useMemo(
-    () =>
-      MODELS.find((m) => m.id === llmConfig.baseModel)?.label ?? "Base Model",
-    [llmConfig.baseModel],
-  );
 
   const [tab, setTab] = useState<TabKey>("brain");
 
   const layers = useMemo(() => [2, ...hidden, 1], [hidden]);
-  const estimatedParams = useMemo(() => estimateParams(layers), [layers]);
+  const estimatedMLPParams = useMemo(
+    () => estimateMLPParams(layers),
+    [layers],
+  );
+  const estimatedLLMParams = useMemo(
+    () =>
+      estimateLLMParams(
+        Math.max(2, uniqueChars(llmConfig.corpus)),
+        llmConfig.contextSize,
+        llmConfig.hiddenSize,
+      ),
+    [llmConfig.corpus, llmConfig.contextSize, llmConfig.hiddenSize],
+  );
 
+  // ---- MLP worker ----
   useEffect(() => {
     const worker = new Worker(
       new URL("./lib/trainer.worker.ts", import.meta.url),
@@ -138,13 +191,71 @@ export default function App() {
       learningRate,
     };
     worker.postMessage({ type: "init", config, dataset });
-    return () => {
-      worker.terminate();
-    };
+    return () => worker.terminate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const reinit = (
+  // ---- LLM worker ----
+  useEffect(() => {
+    const worker = new Worker(
+      new URL("./lib/text.worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    textWorkerRef.current = worker;
+    worker.onmessage = (e: MessageEvent) => {
+      const msg = e.data;
+      if (msg.type === "snapshot") {
+        setTextSnap({
+          epoch: msg.epoch,
+          loss: msg.loss,
+          paramCount: msg.paramCount,
+          vocabSize: msg.vocabSize,
+          contextSize: msg.contextSize,
+          hiddenSize: msg.hiddenSize,
+          sample: msg.sample,
+          tokensPerSecond: msg.tokensPerSecond,
+          trainedSamples: msg.trainedSamples,
+        });
+      } else if (msg.type === "generation") {
+        const cb = pendingGenRef.current.get(msg.id);
+        if (cb) {
+          pendingGenRef.current.delete(msg.id);
+          cb(msg.text);
+        }
+      } else if (msg.type === "exportModel") {
+        const cb = pendingGenRef.current.get(msg.id);
+        if (cb) {
+          pendingGenRef.current.delete(msg.id);
+          cb(JSON.stringify(msg.payload));
+        }
+      }
+    };
+    worker.postMessage({
+      type: "init",
+      opts: {
+        corpus: llmConfig.corpus,
+        contextSize: llmConfig.contextSize,
+        hiddenSize: llmConfig.hiddenSize,
+        learningRate: llmConfig.learningRate,
+        temperature: llmConfig.temperature,
+      },
+    });
+    return () => worker.terminate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Push live config tweaks (lr/temperature) to the LLM worker without resetting weights.
+  useEffect(() => {
+    textWorkerRef.current?.postMessage({
+      type: "config",
+      partial: {
+        learningRate: llmConfig.learningRate,
+        temperature: llmConfig.temperature,
+      },
+    });
+  }, [llmConfig.learningRate, llmConfig.temperature]);
+
+  const reinitMLP = (
     nextHidden = hidden,
     nextActivation = activation,
     nextDataset = dataset,
@@ -163,54 +274,70 @@ export default function App() {
     worker.postMessage({ type: "reset", config, dataset: nextDataset });
   };
 
+  const rebuildLLM = () => {
+    setLLMPlaying(false);
+    textWorkerRef.current?.postMessage({
+      type: "reset",
+      opts: {
+        corpus: llmConfig.corpus,
+        contextSize: llmConfig.contextSize,
+        hiddenSize: llmConfig.hiddenSize,
+        learningRate: llmConfig.learningRate,
+        temperature: llmConfig.temperature,
+      },
+    });
+    toast({ title: "Model rebuilt", description: "Weights reset to random." });
+  };
+
+  // ---- MLP handlers ----
   const handleAddLayer = () => {
     if (hidden.length >= 4) {
       toast({ title: "Max 4 hidden layers", description: "Keep it simple." });
       return;
     }
     const next = [...hidden, 4];
-    if (estimateParams([2, ...next, 1]) > MAX_PARAMS) {
+    if (estimateMLPParams([2, ...next, 1]) > MAX_PARAMS_MLP) {
       toast({
         title: "Parameter budget exceeded",
-        description: `Network would exceed ${MAX_PARAMS} parameters.`,
+        description: `Network would exceed ${MAX_PARAMS_MLP} parameters.`,
       });
       return;
     }
     setHidden(next);
-    reinit(next);
+    reinitMLP(next);
   };
 
   const handleRemoveLayer = () => {
     if (hidden.length <= 1) return;
     const next = hidden.slice(0, -1);
     setHidden(next);
-    reinit(next);
+    reinitMLP(next);
   };
 
   const handleNeuronChange = (idx: number, delta: number) => {
     const next = hidden.slice();
     next[idx] = Math.max(1, Math.min(12, next[idx] + delta));
-    if (estimateParams([2, ...next, 1]) > MAX_PARAMS) {
+    if (estimateMLPParams([2, ...next, 1]) > MAX_PARAMS_MLP) {
       toast({
         title: "Parameter budget exceeded",
-        description: `Cannot exceed ${MAX_PARAMS} parameters.`,
+        description: `Cannot exceed ${MAX_PARAMS_MLP} parameters.`,
       });
       return;
     }
     setHidden(next);
-    reinit(next);
+    reinitMLP(next);
   };
 
   const handleActivation = (v: string) => {
     const a = v as Activation;
     setActivation(a);
-    reinit(hidden, a);
+    reinitMLP(hidden, a);
   };
 
   const handleDataset = (v: string) => {
     const d = v as DatasetKind;
     setDataset(d);
-    reinit(hidden, activation, d);
+    reinitMLP(hidden, activation, d);
   };
 
   const handleLR = (vals: number[]) => {
@@ -230,29 +357,75 @@ export default function App() {
     }
   };
 
+  const handleLLMSpeed = (vals: number[]) => {
+    const v = vals[0];
+    setLLMEpochsPerSecond(v);
+    if (llmPlaying) {
+      textWorkerRef.current?.postMessage({
+        type: "play",
+        epochsPerSecond: v,
+      });
+    }
+  };
+
   const handlePlay = () => {
-    if (playing) {
-      workerRef.current?.postMessage({ type: "pause" });
-      setPlaying(false);
+    if (mode === "mlp") {
+      if (playing) {
+        workerRef.current?.postMessage({ type: "pause" });
+        setPlaying(false);
+      } else {
+        workerRef.current?.postMessage({ type: "play", epochsPerSecond });
+        setPlaying(true);
+      }
     } else {
-      workerRef.current?.postMessage({ type: "play", epochsPerSecond });
-      setPlaying(true);
+      if (llmPlaying) {
+        textWorkerRef.current?.postMessage({ type: "pause" });
+        setLLMPlaying(false);
+      } else {
+        textWorkerRef.current?.postMessage({
+          type: "play",
+          epochsPerSecond: llmEpochsPerSecond,
+        });
+        setLLMPlaying(true);
+      }
     }
   };
 
   const handleReset = () => {
     if (mode === "mlp") {
-      reinit();
+      reinitMLP();
     } else {
+      rebuildLLM();
       setMessages([]);
-      toast({ title: "Conversation cleared" });
     }
   };
 
-  const handleSave = () => {
+  const generateFromWorker = useCallback(
+    (seed: string): Promise<string> =>
+      new Promise((resolve) => {
+        const worker = textWorkerRef.current;
+        if (!worker) {
+          resolve("(model not ready)");
+          return;
+        }
+        const id = `g-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        pendingGenRef.current.set(id, resolve);
+        worker.postMessage({
+          type: "generate",
+          id,
+          seed,
+          length: 50,
+          temperature: llmConfig.temperature,
+        });
+      }),
+    [llmConfig.temperature],
+  );
+
+  const handleSave = async () => {
     if (mode === "mlp") {
       if (!snap) return;
       const payload = {
+        kind: "mlp",
         architecture: { layers, activation },
         learningRate,
         epoch: snap.epoch,
@@ -275,27 +448,32 @@ export default function App() {
         description: "Your trained model is ready to ship.",
       });
     } else {
-      const payload = {
-        baseModel: llmConfig.baseModel,
-        systemPrompt: llmConfig.systemPrompt,
-        temperature: llmConfig.temperature,
-        loraRank: 8,
-        trainingPairs: messages
-          .filter((m) => m.corrected)
-          .map((m) => ({ original: m.content, corrected: m.corrected })),
-      };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], {
-        type: "application/json",
+      // Ask the worker to dump the trained char-LM weights.
+      const worker = textWorkerRef.current;
+      if (!worker) return;
+      const id = `e-${Date.now()}`;
+      const json = await new Promise<string>((resolve) => {
+        pendingGenRef.current.set(id, resolve);
+        worker.postMessage({ type: "exportModel", id });
       });
+      if (!json || json === "null") {
+        toast({
+          title: "Nothing to export",
+          description: "Train the model first.",
+        });
+        return;
+      }
+      const pretty = JSON.stringify(JSON.parse(json), null, 2);
+      const blob = new Blob([pretty], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `adapter.json`;
+      a.download = `char-lm.json`;
       a.click();
       URL.revokeObjectURL(url);
       toast({
-        title: "adapter.json saved",
-        description: "LoRA fine-tune metadata exported.",
+        title: "char-lm.json saved",
+        description: "Vocabulary, config, and weights exported.",
       });
     }
   };
@@ -308,11 +486,18 @@ export default function App() {
       workerRef.current?.postMessage({ type: "pause" });
       setPlaying(false);
     }
+    if (m === "mlp" && llmPlaying) {
+      textWorkerRef.current?.postMessage({ type: "pause" });
+      setLLMPlaying(false);
+    }
   };
 
-  const overBudget = estimatedParams > MAX_PARAMS;
-  const llmHasModel = messages.length > 0 || correctionCount > 0;
-  const playLabel = mode === "mlp" ? (playing ? "Pause" : "Train") : "Train";
+  const overBudgetMLP = estimatedMLPParams > MAX_PARAMS_MLP;
+  const llmHasModel = textSnap.epoch > 0;
+  const isPlaying = mode === "mlp" ? playing : llmPlaying;
+  const playLabel = mode === "mlp" ? "Train" : "Train";
+
+  const llmModelLabel = `Char-LM · ${llmConfig.contextSize}→${llmConfig.hiddenSize}→${textSnap.vocabSize}`;
 
   // ===== MLP VIEWS =====
   const MLPArchitect = (
@@ -327,10 +512,10 @@ export default function App() {
           </div>
           <span
             className={`text-[11px] tabular-nums ${
-              overBudget ? "text-red-400" : "text-slate-400"
+              overBudgetMLP ? "text-red-400" : "text-slate-400"
             }`}
           >
-            {estimatedParams} / {MAX_PARAMS} params
+            {estimatedMLPParams} / {MAX_PARAMS_MLP} params
           </span>
         </div>
 
@@ -474,7 +659,7 @@ export default function App() {
           </div>
         </div>
         <div className="text-[11px] text-slate-400 tabular-nums whitespace-nowrap">
-          {layers.join(" → ")} · {snap?.paramCount ?? estimatedParams}p
+          {layers.join(" → ")} · {snap?.paramCount ?? estimatedMLPParams}p
         </div>
       </div>
       <div className="rounded-xl bg-slate-950/60 border border-slate-800 overflow-hidden">
@@ -537,10 +722,46 @@ export default function App() {
   );
 
   // ===== LLM VIEWS =====
+  const LLMArchitectView = (
+    <div className="space-y-4">
+      <LLMArchitect
+        config={llmConfig}
+        onChange={setLLMConfig}
+        onApply={rebuildLLM}
+        paramCount={estimatedLLMParams}
+        vocabSize={Math.max(2, uniqueChars(llmConfig.corpus))}
+        maxParams={MAX_PARAMS_LLM}
+      />
+      <Card className="p-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <Zap className="size-4 text-amber-400" />
+          <span className="text-sm font-semibold text-slate-100">
+            Train Speed
+          </span>
+        </div>
+        <div className="space-y-2">
+          <div className="flex justify-between">
+            <span className="text-xs text-slate-400">Epochs / sec</span>
+            <span className="text-xs tabular-nums text-slate-200">
+              {llmEpochsPerSecond}
+            </span>
+          </div>
+          <Slider
+            min={1}
+            max={60}
+            step={1}
+            value={[llmEpochsPerSecond]}
+            onValueChange={handleLLMSpeed}
+            className="py-2"
+          />
+        </div>
+      </Card>
+    </div>
+  );
+
   const LLMBrain = (
     <ChatView
-      modelLabel={llmModel}
-      systemPrompt={llmConfig.systemPrompt}
+      modelLabel={llmModelLabel}
       messages={messages}
       setMessages={setMessages}
       loading={chatLoading}
@@ -548,30 +769,38 @@ export default function App() {
       onCorrection={() =>
         toast({
           title: "Correction recorded",
-          description: "Added to your LoRA training set.",
+          description: "Added to your fine-tune set.",
         })
       }
+      generate={generateFromWorker}
+      liveSample={textSnap.sample}
+      epoch={textSnap.epoch}
+      loss={textSnap.loss}
+      isTraining={llmPlaying}
     />
   );
 
   const LLMOutput = (
     <div className="space-y-4">
       <LLMStats
-        modelLabel={llmModel}
+        modelLabel={llmModelLabel}
+        epoch={textSnap.epoch}
+        loss={textSnap.loss}
+        paramCount={textSnap.paramCount}
+        vocabSize={textSnap.vocabSize}
+        contextSize={textSnap.contextSize}
+        hiddenSize={textSnap.hiddenSize}
+        tokensPerSecond={textSnap.tokensPerSecond}
+        trainedSamples={textSnap.trainedSamples}
         messageCount={messages.length}
         correctionCount={correctionCount}
+        liveSample={textSnap.sample}
       />
       <SharingHub mode="llm" onDownload={handleSave} hasModel={llmHasModel} />
     </div>
   );
 
-  // Active per-tab content
-  const ArchitectContent =
-    mode === "mlp" ? (
-      MLPArchitect
-    ) : (
-      <LLMArchitect config={llmConfig} onChange={setLLMConfig} />
-    );
+  const ArchitectContent = mode === "mlp" ? MLPArchitect : LLMArchitectView;
   const BrainContent = mode === "mlp" ? MLPBrain : LLMBrain;
   const OutputContent = mode === "mlp" ? MLPOutput : LLMOutput;
 
@@ -587,7 +816,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900 text-slate-100">
-      {/* Sticky header */}
       <header className="sticky top-0 z-20 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md">
         <div className="px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -642,36 +870,32 @@ export default function App() {
               <Save className="size-3.5" />
               Save
             </Button>
-            {mode === "mlp" && (
-              <Button
-                onClick={handlePlay}
-                className="gap-1.5 min-w-[88px] sm:min-w-[96px] min-h-[40px] rounded-xl"
-              >
-                {playing ? (
-                  <>
-                    <Pause className="size-4" />
-                    {playLabel}
-                  </>
-                ) : (
-                  <>
-                    <Play className="size-4" />
-                    {playLabel}
-                  </>
-                )}
-              </Button>
-            )}
+            <Button
+              onClick={handlePlay}
+              className="gap-1.5 min-w-[88px] sm:min-w-[96px] min-h-[40px] rounded-xl"
+            >
+              {isPlaying ? (
+                <>
+                  <Pause className="size-4" />
+                  Pause
+                </>
+              ) : (
+                <>
+                  <Play className="size-4" />
+                  {playLabel}
+                </>
+              )}
+            </Button>
           </div>
         </div>
       </header>
 
-      {/* Mobile: tabbed view */}
       <main className="md:hidden px-3 pt-4 pb-28">
         {tab === "architect" && ArchitectContent}
         {tab === "brain" && BrainContent}
         {tab === "output" && OutputContent}
       </main>
 
-      {/* Desktop: dashboard */}
       <main className="hidden md:grid grid-cols-12 gap-4 p-4 lg:p-6">
         <aside className="col-span-4 lg:col-span-3">{ArchitectContent}</aside>
         <section className="col-span-8 lg:col-span-9 space-y-4">
@@ -736,9 +960,18 @@ export default function App() {
           ) : (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
               <LLMStats
-                modelLabel={llmModel}
+                modelLabel={llmModelLabel}
+                epoch={textSnap.epoch}
+                loss={textSnap.loss}
+                paramCount={textSnap.paramCount}
+                vocabSize={textSnap.vocabSize}
+                contextSize={textSnap.contextSize}
+                hiddenSize={textSnap.hiddenSize}
+                tokensPerSecond={textSnap.tokensPerSecond}
+                trainedSamples={textSnap.trainedSamples}
                 messageCount={messages.length}
                 correctionCount={correctionCount}
+                liveSample={textSnap.sample}
               />
               <SharingHub
                 mode="llm"
@@ -750,7 +983,6 @@ export default function App() {
         </section>
       </main>
 
-      {/* Mobile bottom tab bar */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-20 border-t border-slate-800 bg-slate-950/90 backdrop-blur-lg">
         <div className="grid grid-cols-3">
           {tabs.map((t) => {
