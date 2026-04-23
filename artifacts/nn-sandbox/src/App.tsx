@@ -31,6 +31,8 @@ import { NetworkCanvas } from "@/components/NetworkCanvas";
 import { DataView } from "@/components/DataView";
 import { SharingHub } from "@/components/SharingHub";
 import { ModeToggle, type AppMode } from "@/components/ModeToggle";
+import { RuntimeToggle, type RuntimeMode } from "@/components/RuntimeToggle";
+import { ProMode } from "@/components/pro/ProMode";
 import {
   LLMArchitect,
   type LLMConfig,
@@ -165,6 +167,7 @@ export default function App() {
   >(new Map());
 
   const [mode, setMode] = useState<AppMode>("mlp");
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>("lite");
 
   // ---- MLP state ----
   const [hidden, setHidden] = useState<number[]>([6, 4]);
@@ -1015,8 +1018,15 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            <ModeToggle mode={mode} onChange={handleModeChange} />
+            <RuntimeToggle mode={runtimeMode} onChange={setRuntimeMode} />
+            {runtimeMode === "lite" && (
+              <>
+                <div className="w-px h-6 bg-slate-800 mx-0.5 hidden sm:block" />
+                <ModeToggle mode={mode} onChange={handleModeChange} />
+              </>
+            )}
             <div className="w-px h-6 bg-slate-800 mx-0.5 hidden sm:block" />
+            {runtimeMode === "lite" && (<>
             <Button
               size="icon"
               variant="secondary"
@@ -1069,10 +1079,15 @@ export default function App() {
                 </>
               )}
             </Button>
+            </>)}
           </div>
         </div>
       </header>
 
+      {runtimeMode === "pro" ? (
+        <ProMode />
+      ) : (
+      <>
       <main className="md:hidden px-3 pt-4 pb-28">
         {tab === "architect" && ArchitectContent}
         {tab === "brain" && BrainContent}
@@ -1203,6 +1218,8 @@ export default function App() {
           }}
         />
       </nav>
+      </>
+      )}
 
       <SaveModal
         open={saveOpen}

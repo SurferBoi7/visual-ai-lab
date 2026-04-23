@@ -1,0 +1,27 @@
+Act as a Senior Full-Stack ML Engineer. We are upgrading our Visual AI Lab to "Phase 3" by implementing a "Desktop Pro Mode" powered by WebGPU and Transformers.js (v3). 
+
+CRITICAL: Do NOT delete the existing pure-TypeScript CPU engine or the IndexedDB library. That is now our "Lite Mode".
+
+### 1. THE ARCHITECTURE TOGGLE
+* Add a global toggle switch in the main header: "Lite Mode (CPU)" vs "Pro Mode (WebGPU)".
+* If Lite Mode is active: Render the app exactly as it is right now (the 4 bottom tabs, text.worker.ts, etc.).
+* If Pro Mode is active: Hide the mobile navigation and switch to a widescreen Desktop IDE layout.
+
+### 2. THE PRO MODE UI (Desktop Layout)
+* **Left Sidebar:** A list of available pre-trained Base Models. Start with one option: "SmolLM-135M (80MB)".
+* **Main Center View:** A professional Chat/Terminal interface. 
+* **Right/Bottom Panel:** GPU Telemetry (VRAM usage, WebGPU initialization status, Tokens/sec).
+
+### 3. TRANSFORMERS.JS INTEGRATION (The Engine)
+* Install `@huggingface/transformers` (version 3, which supports WebGPU).
+* Create a new worker file: `webgpu.worker.ts`.
+* In this worker, set up the pipeline to load `HuggingFaceTB/SmolLM-135M-Instruct` (or a supported quantized equivalent) using the `webgpu` device.
+* The worker must report loading progress (downloading weights) back to the UI so the user sees a progress bar before they can chat.
+
+### 4. INFERENCE FIRST
+* For this first iteration of Pro Mode, focus ONLY on Inference (Chatting). We will add LoRA fine-tuning UI later.
+* When the user types a prompt in Pro Mode, the webgpu worker should generate the response using the Transformers.js pipeline and stream it back to the UI token-by-token.
+
+### RULES
+* Ensure WebGPU fallback logic exists: if `navigator.gpu` is undefined (e.g., they open Pro Mode on an old iPhone), show an amber warning that it will fall back to WASM (CPU) and run slowly.
+* Keep the UI dark, sleek, and distinct from the Lite mode so the user feels they have entered a "Developer Environment".
