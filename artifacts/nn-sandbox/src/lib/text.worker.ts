@@ -19,6 +19,18 @@ import {
 // tokenization.
 const STOP_SEQUENCES = ["User:", " User:", "\nUser:"];
 
+// Lowercase, strip punctuation, collapse whitespace. Used on every piece of
+// text that flows into the model — both the training corpus and live chat
+// prompts — so the vocabulary stays small and consistent (e.g. "Sky", "sky"
+// and "sky's" all collapse to the single token "sky").
+export function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function findStopCut(text: string): number {
   let earliest = -1;
   for (const s of STOP_SEQUENCES) {
@@ -66,7 +78,10 @@ function shuffleOrder() {
 }
 
 function init(opts: InitOpts) {
-  corpus = opts.corpus.length > 0 ? opts.corpus : " ";
+  // Normalize the training corpus before vocab/window construction so the
+  // model only ever sees lowercase, punctuation-free tokens.
+  const normalized = normalizeText(opts.corpus);
+  corpus = normalized.length > 0 ? normalized : " ";
   tokenization = opts.tokenization ?? "char";
   temperature = opts.temperature;
   corpusTokens = tokenize(corpus, tokenization);
@@ -201,7 +216,10 @@ self.onmessage = (e: MessageEvent) => {
         });
         break;
       }
-      const seedTokens = tokenize(msg.seed ?? "", tokenization);
+      // Normalize the user's prompt the exact same way we normalized the
+      // training corpus so the seed lands in the model's known vocabulary
+      // (e.g. "What is the Sky's colour?" → "what is the skys colour").
+      const seedTokens = tokenize(normalizeText(msg.seed ?? ""), tokenization);
       const length = msg.length ?? 50;
       const temp = msg.temperature ?? temperature;
       const ctxSize = net.config.contextSize;

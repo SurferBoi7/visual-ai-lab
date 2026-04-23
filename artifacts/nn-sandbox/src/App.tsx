@@ -112,13 +112,27 @@ function estimateLLMParams(
   return vocab * ctx * hidden + hidden + hidden * vocab + vocab;
 }
 
+// Mirrors `normalizeText` from text.worker.ts. Kept as a small inline helper
+// here so the main thread doesn't have to import the worker module (which
+// would also pull in its `self.onmessage` registration).
+function normalizePromptForLLM(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function uniqueChars(s: string): number {
   return new Set(s).size;
 }
 
 function vocabSizeFor(corpus: string, mode: Tokenization): number {
-  if (mode === "char") return uniqueChars(corpus);
-  return new Set(tokenize(corpus, "word")).size;
+  // The worker normalizes the corpus before building its vocab, so estimate
+  // against the normalized form to keep the UI's param/vocab numbers honest.
+  const normalized = normalizePromptForLLM(corpus);
+  if (mode === "char") return uniqueChars(normalized);
+  return new Set(tokenize(normalized, "word")).size;
 }
 
 function slug(s: string): string {
@@ -466,7 +480,10 @@ export default function App() {
         worker.postMessage({
           type: "generate",
           id,
-          seed,
+          // Normalize the prompt before it crosses the worker boundary so the
+          // seed matches the lowercased / punctuation-free vocabulary the
+          // network was trained on. The worker also normalizes defensively.
+          seed: normalizePromptForLLM(seed),
           length: 50,
           temperature: llmConfig.temperature,
         });
