@@ -111,14 +111,44 @@ async function loadModel(modelId: string, preferred: Device) {
 
     post({ type: "ready", modelId, device });
   } catch (err) {
+    const detail =
+      err instanceof Error
+        ? err.message || err.name || "Unknown WebGPU Error"
+        : String(err) || "Unknown WebGPU Error";
     post({
       type: "error",
-      message: `Failed to load model: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      scope: "load",
+      message: `Failed to load model: ${detail}`,
+      payload: detail,
     });
   }
 }
+
+// Catch any otherwise-silent failures (unhandled promise rejections, WebGPU
+// shader compile errors, OOM, etc.) and surface them to the UI.
+self.addEventListener("error", (e: ErrorEvent) => {
+  post({
+    type: "error",
+    scope: "worker",
+    message: e.message || "Worker error",
+    payload: e.message || "Worker error",
+  });
+});
+self.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => {
+  const reason = e.reason;
+  const detail =
+    reason instanceof Error
+      ? reason.message || reason.name
+      : typeof reason === "string"
+        ? reason
+        : "Unhandled promise rejection in worker";
+  post({
+    type: "error",
+    scope: "worker",
+    message: detail,
+    payload: detail,
+  });
+});
 
 async function generate(msg: GenerateMsg) {
   if (!generator) {
@@ -213,12 +243,19 @@ async function generate(msg: GenerateMsg) {
       modelId: currentModelId,
     });
   } catch (err) {
+    // Surface the underlying WebGPU / pipeline error to the UI so we never
+    // silently hang on the loading bubble. Include both `message` (legacy) and
+    // `payload` (per Pro Mode error contract) for compatibility.
+    const detail =
+      err instanceof Error
+        ? err.message || err.name || "Unknown WebGPU Error"
+        : String(err) || "Unknown WebGPU Error";
     post({
       type: "error",
       id: msg.id,
-      message: `Generation failed: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      scope: "generate",
+      message: `Generation failed: ${detail}`,
+      payload: detail,
     });
   }
 }

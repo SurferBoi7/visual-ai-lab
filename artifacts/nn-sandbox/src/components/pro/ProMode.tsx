@@ -48,6 +48,7 @@ interface ProMessage {
   tokensPerSecond?: number;
   tokens?: number;
   streaming?: boolean;
+  error?: boolean;
 }
 
 type LoadStage =
@@ -103,6 +104,7 @@ export function ProMode() {
     lastLatencyMs: 0,
   });
   const [genStartedAt, setGenStartedAt] = useState<number | null>(null);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
 
   const hasWebGPU = telemetry.hasWebGPU;
 
@@ -204,22 +206,27 @@ export function ProMode() {
           break;
         }
         case "error": {
+          const detail: string =
+            msg.payload || msg.message || "Unknown WebGPU Error";
           setLoadStage((prev) => (prev === "ready" ? "ready" : "error"));
           setTelemetry((t) => ({
             ...t,
             stage: t.stage === "ready" ? "ready" : "error",
-            statusMessage: msg.message ?? "Unknown error",
+            statusMessage: detail,
           }));
           setStreaming(false);
+          setRuntimeError(detail);
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
+            // Always replace the streaming placeholder with a clearly marked
+            // error bubble so the user is never left staring at "...".
             if (last && last.role === "assistant" && last.streaming) {
               next[next.length - 1] = {
                 ...last,
                 streaming: false,
-                content:
-                  last.content || `⚠ ${msg.message ?? "Generation failed."}`,
+                error: true,
+                content: `Generation failed: ${detail}`,
               };
             }
             return next;
@@ -273,6 +280,7 @@ export function ProMode() {
     setMessages((prev) => [...prev, userMsg, placeholder]);
     setInput("");
     setStreaming(true);
+    setRuntimeError(null);
     setGenStartedAt(performance.now());
     workerRef.current.postMessage({
       type: "generate",
@@ -437,6 +445,24 @@ export function ProMode() {
             )}
           </div>
 
+          {runtimeError && (
+            <div className="mx-4 mt-3 rounded-lg border border-red-500/50 bg-red-500/10 px-3 py-2.5 flex items-start gap-2">
+              <AlertTriangle className="size-4 text-red-300 shrink-0 mt-0.5" />
+              <div className="flex-1 text-[11px] text-red-100 leading-snug">
+                <div className="font-semibold mb-0.5 uppercase tracking-wider text-red-200">
+                  Runtime Error
+                </div>
+                <div className="font-mono break-words">{runtimeError}</div>
+              </div>
+              <button
+                onClick={() => setRuntimeError(null)}
+                className="text-[10px] uppercase tracking-wider text-red-200/70 hover:text-red-100 px-2 py-1 rounded border border-red-500/40 hover:border-red-500/70"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
           {!hasWebGPU && (
             <div className="mx-4 mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 flex items-start gap-2">
               <AlertTriangle className="size-4 text-amber-300 shrink-0 mt-0.5" />
@@ -525,9 +551,11 @@ export function ProMode() {
                 </div>
                 <div
                   className={`max-w-[78%] rounded-lg px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap break-words border ${
-                    m.role === "user"
-                      ? "bg-indigo-500/10 border-indigo-500/30 text-indigo-50"
-                      : "bg-zinc-900/80 border-zinc-800 text-zinc-100"
+                    m.error
+                      ? "bg-red-500/10 border-red-500/40 text-red-100 font-mono"
+                      : m.role === "user"
+                        ? "bg-indigo-500/10 border-indigo-500/30 text-indigo-50"
+                        : "bg-zinc-900/80 border-zinc-800 text-zinc-100"
                   }`}
                 >
                   {m.content ||
