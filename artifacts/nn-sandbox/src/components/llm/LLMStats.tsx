@@ -12,6 +12,17 @@ interface Props {
   trainedSamples: number;
   messageCount: number;
   liveSample: string;
+  tokenization?: "char" | "word";
+}
+
+function formatNumber(n: number): string {
+  if (!isFinite(n)) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (abs >= 10_000) return `${(n / 1_000).toFixed(0)}k`;
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return n.toLocaleString();
 }
 
 function Card({
@@ -42,8 +53,12 @@ export function LLMStats({
   trainedSamples,
   messageCount,
   liveSample,
+  tokenization = "char",
 }: Props) {
   const memKB = (paramCount * 4) / 1024;
+  const memLabel =
+    memKB >= 1024 ? `${(memKB / 1024).toFixed(2)} MB` : `${memKB.toFixed(1)} KB`;
+  const tokenWord = tokenization === "word" ? "words" : "chars";
 
   return (
     <div className="space-y-4">
@@ -70,20 +85,20 @@ export function LLMStats({
           <Metric
             icon={<Cpu className="size-3.5 text-sky-400" />}
             label="Memory"
-            value={`${memKB.toFixed(1)} KB`}
-            sub={`${paramCount.toLocaleString()} params`}
+            value={memLabel}
+            sub={`${formatNumber(paramCount)} params`}
           />
           <Metric
             icon={<BookOpen className="size-3.5 text-fuchsia-400" />}
             label="Vocab"
-            value={`${vocabSize}`}
-            sub="unique chars"
+            value={formatNumber(vocabSize)}
+            sub={`unique ${tokenWord}`}
           />
           <Metric
             icon={<Activity className="size-3.5 text-emerald-400" />}
             label="Epoch"
-            value={epoch.toLocaleString()}
-            sub={`${trainedSamples.toLocaleString()} steps`}
+            value={formatNumber(epoch)}
+            sub={`${formatNumber(trainedSamples)} steps`}
           />
           <Metric
             icon={<Activity className="size-3.5 text-rose-400" />}
@@ -97,7 +112,7 @@ export function LLMStats({
           <div className="flex justify-between text-xs">
             <span className="text-slate-400">Architecture</span>
             <span className="tabular-nums text-slate-200">
-              {contextSize}-char ctx → {hiddenSize}h → softmax({vocabSize})
+              {contextSize}-{tokenWord} ctx → {hiddenSize}h → softmax({formatNumber(vocabSize)})
             </span>
           </div>
           <div className="flex justify-between text-xs">

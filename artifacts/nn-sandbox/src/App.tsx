@@ -47,6 +47,7 @@ import {
   type CharLMWeights,
 } from "@/lib/storage";
 import type { Activation, NetworkConfig, DataPoint } from "@/lib/nn";
+import { tokenize, type Tokenization } from "@/lib/textnet";
 
 type DatasetKind = "spiral" | "circle" | "xor";
 type TabKey = "architect" | "brain" | "output" | "library";
@@ -78,10 +79,22 @@ interface TextSnapshot {
 }
 
 const MAX_PARAMS_MLP = 1000;
-const MAX_PARAMS_LLM = 5000;
+const MAX_PARAMS_LLM = 5_000_000;
 
-const DEFAULT_CORPUS =
-  "hello world. hello friend. how are you? i am good. i am a bot. i love you. you are my friend. how do you do? hello world. how are you doing today? i am a friendly bot. ";
+const DEFAULT_CORPUS = [
+  "User: hello",
+  "Bot: hi there how can i help you",
+  "User: how are you",
+  "Bot: i am a small neural network and i am doing great",
+  "User: what is your name",
+  "Bot: i am a tiny language model trained in your browser",
+  "User: tell me a joke",
+  "Bot: why did the neuron cross the layer to get to the other bias",
+  "User: goodbye",
+  "Bot: goodbye have a nice day",
+  "User: thanks",
+  "Bot: you are welcome",
+].join("\n") + "\n";
 
 function estimateMLPParams(layers: number[]): number {
   let p = 0;
@@ -101,6 +114,11 @@ function estimateLLMParams(
 
 function uniqueChars(s: string): number {
   return new Set(s).size;
+}
+
+function vocabSizeFor(corpus: string, mode: Tokenization): number {
+  if (mode === "char") return uniqueChars(corpus);
+  return new Set(tokenize(corpus, "word")).size;
 }
 
 function slug(s: string): string {
@@ -164,12 +182,13 @@ export default function App() {
     hiddenSize: 24,
     learningRate: 0.1,
     temperature: 0.6,
+    tokenization: "char",
   });
   const [textSnap, setTextSnap] = useState<TextSnapshot>({
     epoch: 0,
     loss: 0,
     paramCount: 0,
-    vocabSize: uniqueChars(DEFAULT_CORPUS),
+    vocabSize: vocabSizeFor(DEFAULT_CORPUS, "char"),
     contextSize: 3,
     hiddenSize: 24,
     sample: "",
@@ -193,11 +212,16 @@ export default function App() {
   const estimatedLLMParams = useMemo(
     () =>
       estimateLLMParams(
-        Math.max(2, uniqueChars(llmConfig.corpus)),
+        Math.max(2, vocabSizeFor(llmConfig.corpus, llmConfig.tokenization)),
         llmConfig.contextSize,
         llmConfig.hiddenSize,
       ),
-    [llmConfig.corpus, llmConfig.contextSize, llmConfig.hiddenSize],
+    [
+      llmConfig.corpus,
+      llmConfig.contextSize,
+      llmConfig.hiddenSize,
+      llmConfig.tokenization,
+    ],
   );
 
   // ---- MLP worker ----
@@ -265,6 +289,7 @@ export default function App() {
         hiddenSize: llmConfig.hiddenSize,
         learningRate: llmConfig.learningRate,
         temperature: llmConfig.temperature,
+        tokenization: llmConfig.tokenization,
       },
     });
     return () => worker.terminate();
@@ -311,6 +336,7 @@ export default function App() {
         hiddenSize: llmConfig.hiddenSize,
         learningRate: llmConfig.learningRate,
         temperature: llmConfig.temperature,
+        tokenization: llmConfig.tokenization,
       },
     });
     toast({ title: "Model rebuilt", description: "Weights reset to random." });
@@ -461,6 +487,7 @@ export default function App() {
           // restore a fully-usable chat session.
           parsed.corpus = llmConfig.corpus;
           parsed.temperature = llmConfig.temperature;
+          parsed.tokenization = llmConfig.tokenization;
           resolve(parsed as CharLMWeights & { corpus: string });
         } catch {
           resolve(null);
@@ -598,12 +625,16 @@ export default function App() {
       const w = model.weights as CharLMWeights;
       // Mirror the saved config into the LLM panel UI so the architect tab
       // matches what the worker is now serving.
+      const restoredTok: Tokenization =
+        w.tokenization === "word" ? "word" : "char";
       setLLMConfig({
-        corpus: w.corpus ?? w.vocab.join(""),
+        corpus:
+          w.corpus ?? w.vocab.join(restoredTok === "word" ? " " : ""),
         contextSize: w.config.contextSize,
         hiddenSize: w.config.hiddenSize,
         learningRate: w.config.learningRate,
         temperature: typeof w.temperature === "number" ? w.temperature : 0.6,
+        tokenization: restoredTok,
       });
       textWorkerRef.current?.postMessage({
         type: "loadWeights",
@@ -874,7 +905,10 @@ export default function App() {
         onChange={setLLMConfig}
         onApply={rebuildLLM}
         paramCount={estimatedLLMParams}
-        vocabSize={Math.max(2, uniqueChars(llmConfig.corpus))}
+        vocabSize={Math.max(
+          2,
+          vocabSizeFor(llmConfig.corpus, llmConfig.tokenization),
+        )}
         maxParams={MAX_PARAMS_LLM}
       />
       <Card className="p-5 space-y-3">
@@ -933,6 +967,7 @@ export default function App() {
         trainedSamples={textSnap.trainedSamples}
         messageCount={messages.length}
         liveSample={textSnap.sample}
+        tokenization={llmConfig.tokenization}
       />
       <SharingHub mode="llm" onDownload={handleOpenSave} hasModel={llmHasModel} />
     </div>
@@ -1123,6 +1158,7 @@ export default function App() {
                 trainedSamples={textSnap.trainedSamples}
                 messageCount={messages.length}
                 liveSample={textSnap.sample}
+        tokenization={llmConfig.tokenization}
               />
               <SharingHub
                 mode="llm"

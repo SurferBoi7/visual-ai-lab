@@ -12,6 +12,7 @@ export interface MLPWeights {
 
 export interface CharLMWeights {
   vocab: string[];
+  tokenization?: "char" | "word";
   config: {
     vocabSize: number;
     contextSize: number;

@@ -127,11 +127,40 @@ export class TextNetwork {
   }
 }
 
-export function buildVocab(text: string): {
+export type Tokenization = "char" | "word";
+
+// Split a corpus into tokens. Char-mode keeps every character (whitespace and
+// punctuation included). Word-mode treats whitespace-separated runs of word
+// characters as tokens and emits each non-word character (punctuation) as its
+// own token, which keeps the vocabulary compact while still letting the model
+// learn punctuation.
+export function tokenize(text: string, mode: Tokenization): string[] {
+  if (mode === "char") return text.split("");
+  const matches = text.match(/[A-Za-z0-9_']+|[^\sA-Za-z0-9_']/g);
+  return matches ?? [];
+}
+
+// Join a sequence of tokens back into a display string. Word-mode inserts a
+// space between word tokens but keeps punctuation flush with the previous
+// token, mirroring normal English typography.
+export function joinTokens(tokens: string[], mode: Tokenization): string {
+  if (mode === "char") return tokens.join("");
+  let out = "";
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    const isPunct = /^[^\sA-Za-z0-9_']$/.test(t);
+    const noSpaceBefore =
+      i === 0 || isPunct || /^['(\[{]$/.test(tokens[i - 1] ?? "");
+    out += (noSpaceBefore ? "" : " ") + t;
+  }
+  return out;
+}
+
+export function buildVocab(tokens: string[]): {
   chars: string[];
   stoi: Record<string, number>;
 } {
-  const set = new Set(text.split(""));
+  const set = new Set(tokens);
   const chars = Array.from(set).sort();
   const stoi: Record<string, number> = {};
   chars.forEach((c, i) => (stoi[c] = i));
@@ -139,24 +168,24 @@ export function buildVocab(text: string): {
 }
 
 export function makeWindows(
-  text: string,
+  tokens: string[],
   stoi: Record<string, number>,
   contextSize: number,
 ): { inputs: number[][]; targets: number[] } {
   const inputs: number[][] = [];
   const targets: number[] = [];
-  for (let i = 0; i + contextSize < text.length; i++) {
+  for (let i = 0; i + contextSize < tokens.length; i++) {
     const ctx: number[] = [];
     let ok = true;
     for (let k = 0; k < contextSize; k++) {
-      const id = stoi[text[i + k]];
+      const id = stoi[tokens[i + k]];
       if (id === undefined) {
         ok = false;
         break;
       }
       ctx.push(id);
     }
-    const tgt = stoi[text[i + contextSize]];
+    const tgt = stoi[tokens[i + contextSize]];
     if (!ok || tgt === undefined) continue;
     inputs.push(ctx);
     targets.push(tgt);
@@ -196,30 +225,32 @@ export function sampleFromProbs(
   return probs.length - 1;
 }
 
-export function generateText(
+// Generate a sequence of tokens from a tokenized seed. The caller is
+// responsible for joining the returned tokens with `joinTokens(...)`.
+export function generateTokens(
   net: TextNetwork,
   itos: string[],
   stoi: Record<string, number>,
-  seed: string,
+  seedTokens: string[],
   length: number,
   temperature: number,
-): string {
+): string[] {
   const ctxSize = net.config.contextSize;
   const padId = stoi[" "] ?? 0;
-  const seedIds = seed
-    .split("")
-    .map((c) => (stoi[c] !== undefined ? stoi[c] : padId));
+  const seedIds = seedTokens.map((t) =>
+    stoi[t] !== undefined ? stoi[t] : padId,
+  );
   let ctx: number[];
   if (seedIds.length >= ctxSize) {
     ctx = seedIds.slice(-ctxSize);
   } else {
     ctx = new Array(ctxSize - seedIds.length).fill(padId).concat(seedIds);
   }
-  let out = "";
+  const out: string[] = [];
   for (let i = 0; i < length; i++) {
     const { probs } = net.forward(ctx);
     const next = sampleFromProbs(probs, temperature);
-    out += itos[next];
+    out.push(itos[next]);
     ctx = ctx.slice(1).concat(next);
   }
   return out;

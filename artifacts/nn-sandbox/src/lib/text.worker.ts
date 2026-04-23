@@ -4,7 +4,10 @@ import {
   TextNetwork,
   buildVocab,
   makeWindows,
-  generateText,
+  generateTokens,
+  joinTokens,
+  tokenize,
+  type Tokenization,
 } from "./textnet";
 
 interface InitOpts {
@@ -13,6 +16,7 @@ interface InitOpts {
   hiddenSize: number;
   learningRate: number;
   temperature: number;
+  tokenization: Tokenization;
 }
 
 let net: TextNetwork | null = null;
@@ -21,6 +25,8 @@ let targets: number[] = [];
 let vocab: string[] = [];
 let stoi: Record<string, number> = {};
 let corpus = "";
+let corpusTokens: string[] = [];
+let tokenization: Tokenization = "char";
 let temperature = 0.8;
 
 let epoch = 0;
@@ -43,11 +49,14 @@ function shuffleOrder() {
 
 function init(opts: InitOpts) {
   corpus = opts.corpus.length > 0 ? opts.corpus : " ";
+  tokenization = opts.tokenization ?? "char";
   temperature = opts.temperature;
-  const v = buildVocab(corpus);
+  corpusTokens = tokenize(corpus, tokenization);
+  if (corpusTokens.length === 0) corpusTokens = [" "];
+  const v = buildVocab(corpusTokens);
   vocab = v.chars;
   stoi = v.stoi;
-  const w = makeWindows(corpus, stoi, opts.contextSize);
+  const w = makeWindows(corpusTokens, stoi, opts.contextSize);
   inputs = w.inputs;
   targets = w.targets;
   net = new TextNetwork({
@@ -79,20 +88,27 @@ function trainEpoch() {
   epoch++;
 }
 
-function pickSeed(): string {
-  // Pick a seed of length >= contextSize from the corpus so we always
-  // bootstrap with a "real" prefix.
-  if (!net) return " ";
+function pickSeedTokens(): string[] {
+  if (!net) return [];
   const ctxSize = net.config.contextSize;
-  const max = Math.max(0, corpus.length - ctxSize);
+  if (corpusTokens.length <= ctxSize) return corpusTokens.slice();
+  const max = corpusTokens.length - ctxSize;
   const start = Math.floor(Math.random() * (max + 1));
-  return corpus.slice(start, start + ctxSize);
+  return corpusTokens.slice(start, start + ctxSize);
 }
 
 function makeSample(length = 32): string {
   if (!net) return "";
-  const seed = pickSeed();
-  return seed + generateText(net, vocab, stoi, seed, length, temperature);
+  const seed = pickSeedTokens();
+  const generated = generateTokens(
+    net,
+    vocab,
+    stoi,
+    seed,
+    length,
+    temperature,
+  );
+  return joinTokens([...seed, ...generated], tokenization);
 }
 
 function tokensPerSecond(): number {
@@ -167,14 +183,16 @@ self.onmessage = (e: MessageEvent) => {
         });
         break;
       }
-      const text = generateText(
+      const seedTokens = tokenize(msg.seed ?? "", tokenization);
+      const generated = generateTokens(
         net,
         vocab,
         stoi,
-        msg.seed ?? "",
+        seedTokens,
         msg.length ?? 50,
         msg.temperature ?? temperature,
       );
+      const text = joinTokens(generated, tokenization);
       postMessage({ type: "generation", id: msg.id, text });
       break;
     }
@@ -182,17 +200,20 @@ self.onmessage = (e: MessageEvent) => {
       pause();
       const w = msg.payload;
       if (!w || !w.config || !w.weights || !w.vocab) break;
-      // Rebuild the corpus context: prefer the saved corpus if present so that
-      // generation seeds work; otherwise fall back to the vocab characters.
+      // Restore the tokenization mode first so the corpus is split the same
+      // way it was when this model was originally trained.
+      tokenization = w.tokenization === "word" ? "word" : "char";
       const restoredCorpus =
         typeof w.corpus === "string" && w.corpus.length > 0
           ? w.corpus
-          : (w.vocab as string[]).join("");
+          : (w.vocab as string[]).join(tokenization === "word" ? " " : "");
       corpus = restoredCorpus;
+      corpusTokens = tokenize(corpus, tokenization);
+      if (corpusTokens.length === 0) corpusTokens = [" "];
       vocab = w.vocab as string[];
       stoi = {};
       for (let i = 0; i < vocab.length; i++) stoi[vocab[i]] = i;
-      const wins = makeWindows(corpus, stoi, w.config.contextSize);
+      const wins = makeWindows(corpusTokens, stoi, w.config.contextSize);
       inputs = wins.inputs;
       targets = wins.targets;
       net = new TextNetwork({
@@ -227,6 +248,7 @@ self.onmessage = (e: MessageEvent) => {
       const payload = {
         kind: "char-lm",
         vocab,
+        tokenization,
         config: net.config,
         epoch,
         loss: lossEMA,
