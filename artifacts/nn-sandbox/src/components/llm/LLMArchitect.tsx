@@ -8,6 +8,10 @@ import {
   Lightbulb,
   Type,
   WholeWord,
+  Filter,
+  MessageSquare,
+  GraduationCap,
+  Plus,
 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 
@@ -20,6 +24,8 @@ export interface LLMConfig {
   learningRate: number;
   temperature: number;
   tokenization: Tokenization;
+  topK: number;
+  systemPrompt: string;
 }
 
 interface Props {
@@ -73,6 +79,33 @@ export function LLMArchitect({
     truncated: boolean;
   } | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
+  const [factQ, setFactQ] = useState("");
+  const [factA, setFactA] = useState("");
+
+  // Generate 4-5 hardcoded phrasings of the user's question and append them to
+  // the corpus as `User: <q>\nBot: <a>` pairs. This is the "Fact Teacher"
+  // shortcut for hammering a single fact into the model from many angles
+  // without making the user hand-type every variation.
+  const addFactVariations = () => {
+    const q = factQ.trim().replace(/[?.!]+$/g, "");
+    const a = factA.trim();
+    if (!q || !a) return;
+    const variations = [
+      `${q}?`,
+      `What is ${q}?`,
+      `Tell me ${q}.`,
+      `Can you tell me ${q}?`,
+      `Do you know ${q}?`,
+    ];
+    const block = variations
+      .map((v) => `User: ${v}\nBot: ${a}`)
+      .join("\n");
+    const sep = config.corpus.endsWith("\n") || config.corpus.length === 0 ? "" : "\n";
+    const next = (config.corpus + sep + block + "\n").slice(0, MAX_CORPUS_BYTES);
+    onChange({ ...config, corpus: next });
+    setFactQ("");
+    setFactA("");
+  };
 
   const isWord = config.tokenization === "word";
   const tokenLabel = isWord ? "tokens" : "chars";
@@ -227,6 +260,51 @@ export function LLMArchitect({
           </p>
         </div>
 
+        {/* Top-K sampling */}
+        <div className="space-y-2">
+          <div className="flex justify-between items-center">
+            <span className="text-xs text-slate-400 inline-flex items-center gap-1.5">
+              <Filter className="size-3 text-fuchsia-300" />
+              Top-K Sampling
+            </span>
+            <span className="text-xs tabular-nums text-slate-200">
+              {config.topK}
+            </span>
+          </div>
+          <Slider
+            min={1}
+            max={40}
+            step={1}
+            value={[config.topK]}
+            onValueChange={([v]) => onChange({ ...config, topK: v })}
+            className="py-2"
+          />
+          <p className="text-[10px] text-slate-500">
+            Only the {config.topK} most-likely next tokens are considered when
+            sampling. Lower = safer & more on-topic.
+          </p>
+        </div>
+
+        {/* System prompt */}
+        <div className="space-y-2">
+          <span className="text-xs text-slate-400 inline-flex items-center gap-1.5">
+            <MessageSquare className="size-3 text-sky-300" />
+            System Prompt
+          </span>
+          <input
+            type="text"
+            value={config.systemPrompt}
+            onChange={(e) =>
+              onChange({ ...config, systemPrompt: e.target.value })
+            }
+            placeholder="Bot: I am a helpful AI."
+            className="w-full min-h-[40px] rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+          />
+          <p className="text-[10px] text-slate-500">
+            Invisibly prepended to every chat prompt to lock the bot's persona.
+          </p>
+        </div>
+
         <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-3 flex flex-wrap gap-1.5">
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-300 border border-sky-500/30">
             vocab: {vocabSize.toLocaleString()}
@@ -338,6 +416,43 @@ export function LLMArchitect({
             {readError}
           </div>
         )}
+
+        {/* Fact Teacher — synthesise multiple Q/A phrasings from one fact */}
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2.5">
+          <div className="flex items-center gap-2">
+            <GraduationCap className="size-4 text-emerald-300" />
+            <span className="text-xs font-semibold text-emerald-100">
+              Fact Teacher
+            </span>
+          </div>
+          <p className="text-[10px] text-emerald-100/70 leading-relaxed">
+            Teach the bot one fact in 5 different phrasings — pairs are
+            appended to the corpus as <code className="font-mono">User:/Bot:</code> lines.
+          </p>
+          <input
+            type="text"
+            value={factQ}
+            onChange={(e) => setFactQ(e.target.value)}
+            placeholder="Question (e.g. the capital of France)"
+            className="w-full min-h-[36px] rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+          />
+          <input
+            type="text"
+            value={factA}
+            onChange={(e) => setFactA(e.target.value)}
+            placeholder="Answer (e.g. Paris)"
+            className="w-full min-h-[36px] rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+          />
+          <button
+            type="button"
+            onClick={addFactVariations}
+            disabled={!factQ.trim() || !factA.trim()}
+            className="w-full min-h-[38px] rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-100 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Plus className="size-3.5" />
+            Add Fact Variations
+          </button>
+        </div>
 
         {/* Manual fallback */}
         <div className="space-y-1.5">

@@ -197,6 +197,8 @@ export default function App() {
     learningRate: 0.1,
     temperature: 0.6,
     tokenization: "char",
+    topK: 5,
+    systemPrompt: "",
   });
   const [textSnap, setTextSnap] = useState<TextSnapshot>({
     epoch: 0,
@@ -304,22 +306,25 @@ export default function App() {
         learningRate: llmConfig.learningRate,
         temperature: llmConfig.temperature,
         tokenization: llmConfig.tokenization,
+        topK: llmConfig.topK,
       },
     });
     return () => worker.terminate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Push live config tweaks (lr/temperature) to the LLM worker without resetting weights.
+  // Push live config tweaks (lr/temperature/topK) to the LLM worker without
+  // resetting weights, so the user can tune sampling on the fly mid-chat.
   useEffect(() => {
     textWorkerRef.current?.postMessage({
       type: "config",
       partial: {
         learningRate: llmConfig.learningRate,
         temperature: llmConfig.temperature,
+        topK: llmConfig.topK,
       },
     });
-  }, [llmConfig.learningRate, llmConfig.temperature]);
+  }, [llmConfig.learningRate, llmConfig.temperature, llmConfig.topK]);
 
   const reinitMLP = (
     nextHidden = hidden,
@@ -351,6 +356,7 @@ export default function App() {
         learningRate: llmConfig.learningRate,
         temperature: llmConfig.temperature,
         tokenization: llmConfig.tokenization,
+        topK: llmConfig.topK,
       },
     });
     toast({ title: "Model rebuilt", description: "Weights reset to random." });
@@ -480,15 +486,19 @@ export default function App() {
         worker.postMessage({
           type: "generate",
           id,
-          // Normalize the prompt before it crosses the worker boundary so the
-          // seed matches the lowercased / punctuation-free vocabulary the
+          // Invisibly prepend the persona-locking system prompt, then
+          // normalize the combined seed before it crosses the worker boundary
+          // so it matches the lowercased / punctuation-free vocabulary the
           // network was trained on. The worker also normalizes defensively.
-          seed: normalizePromptForLLM(seed),
+          seed: normalizePromptForLLM(
+            (llmConfig.systemPrompt ? llmConfig.systemPrompt + " " : "") +
+              seed,
+          ),
           length: 50,
           temperature: llmConfig.temperature,
         });
       }),
-    [llmConfig.temperature],
+    [llmConfig.temperature, llmConfig.systemPrompt],
   );
 
   const requestLLMExport = useCallback((): Promise<CharLMWeights | null> => {
@@ -642,9 +652,20 @@ export default function App() {
       const w = model.weights as CharLMWeights;
       // Mirror the saved config into the LLM panel UI so the architect tab
       // matches what the worker is now serving.
+      //
+      // Squished-text bug fix: older saves pre-date the `tokenization` field
+      // and would silently fall back to "char", which made restored word-
+      // level models output strings like "goodbyehaveaniceday" with no
+      // spaces. Sniff the vocab in that case — any token longer than one
+      // character can only have come from word-level tokenization.
       const restoredTok: Tokenization =
-        w.tokenization === "word" ? "word" : "char";
-      setLLMConfig({
+        w.tokenization === "word" || w.tokenization === "char"
+          ? w.tokenization
+          : (w.vocab.some((t) => typeof t === "string" && t.length > 1)
+              ? "word"
+              : "char");
+      setLLMConfig((prev) => ({
+        ...prev,
         corpus:
           w.corpus ?? w.vocab.join(restoredTok === "word" ? " " : ""),
         contextSize: w.config.contextSize,
@@ -652,7 +673,7 @@ export default function App() {
         learningRate: w.config.learningRate,
         temperature: typeof w.temperature === "number" ? w.temperature : 0.6,
         tokenization: restoredTok,
-      });
+      }));
       textWorkerRef.current?.postMessage({
         type: "loadWeights",
         payload: {

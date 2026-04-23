@@ -1,0 +1,27 @@
+Act as a Senior ML/React Engineer. We are upgrading our pure TypeScript CPU-based AI Lab (Tier 2.5) with four crucial updates. Please implement all of them carefully, ensuring you do not break the underlying neural network math or the Char/Word tokenization toggle.
+
+### 1. THE SQUISHED TEXT BUG FIX (IndexedDB Load)
+* **Context:** Models saved before our word-level update lack the `tokenization` field in their saved weights, causing them to load as "char" mode and output text without spaces (e.g., "goodbyehaveaniceday").
+* **Fix:** Update the load handler in `App.tsx` and the `loadWeights` case in `text.worker.ts`. Read `w.tokenization` from the saved model. If it exists, use it. If it doesn't exist, but the saved vocabulary contains words (e.g., elements longer than 1 character), safely default to `"word"`. Ensure this state restores correctly so `joinTokens` spaces the output properly.
+
+### 2. TOP-K SAMPLING (Worker & UI)
+* **UI:** Add a "Top-K" slider to the LLM Architect settings (Range: 1 to 40, Default: 5). Add `topK` to the `LLMConfig` state.
+* **Worker (`text.worker.ts`):** During inference (in the generation loop), right after calculating the softmax probabilities for the next token, implement a Top-K filter:
+  1. Sort the probabilities.
+  2. Keep only the top `K` values.
+  3. Set all other probabilities to 0.
+  4. Re-normalize the remaining probabilities so they sum to 1.0 before sampling.
+
+### 3. INVISIBLE SYSTEM PROMPT (Persona Locking)
+* **UI:** Add a text input in the Architect tab called "System Prompt" (e.g., "Bot: I am a helpful AI."). Store it in `LLMConfig`.
+* **Inference:** When the user sends a message from the Chat tab, invisibly prepend this `systemPrompt` (plus a space) to the user's prompt *before* sending it to the worker/context window. Do not show the system prompt in the user's visual chat bubble.
+
+### 4. THE FACT TEACHER (Synthetic Data UI)
+* **UI:** Below the upload dropzone in the Architect tab, build a mini-tool called "Fact Teacher". 
+* **Inputs:** Two text fields: "Question" and "Answer". Plus a button: "Add Fact Variations".
+* **Logic:** When clicked, use a simple JavaScript array to generate 4-5 hardcoded variations of the question (e.g., prefixing with "Tell me", "What is", or reordering). Format them as `User: [Q] \n Bot: [A]` and automatically append these variations to the `corpus` text area state.
+
+### RULES
+* Maintain the dark, sleek UI. 
+* Do not delete the text normalizer if it exists, or the stop-sequence logic.
+* Execute these changes step-by-step and ensure the app compiles cleanly.

@@ -47,6 +47,38 @@ interface InitOpts {
   learningRate: number;
   temperature: number;
   tokenization: Tokenization;
+  topK?: number;
+}
+
+// Detect tokenization mode for older saved models that pre-date the
+// `tokenization` field. If any vocab entry is longer than a single character,
+// it can only have been produced by the word-level tokenizer.
+function inferTokenizationFromVocab(vocabArr: string[]): Tokenization {
+  for (const t of vocabArr) {
+    if (typeof t === "string" && t.length > 1) return "word";
+  }
+  return "char";
+}
+
+// Keep only the K most-likely tokens, zero out the rest, and renormalize so
+// the surviving probabilities sum to 1.0. Returns a new Float32Array — the
+// original `probs` is left untouched in case the caller still needs it.
+function applyTopK(probs: Float32Array, k: number): Float32Array {
+  if (!Number.isFinite(k) || k <= 0 || k >= probs.length) return probs;
+  const indexed: { i: number; p: number }[] = new Array(probs.length);
+  for (let i = 0; i < probs.length; i++) indexed[i] = { i, p: probs[i] };
+  indexed.sort((a, b) => b.p - a.p);
+  const out = new Float32Array(probs.length);
+  let sum = 0;
+  for (let i = 0; i < k; i++) {
+    const { i: idx, p } = indexed[i];
+    out[idx] = p;
+    sum += p;
+  }
+  if (sum <= 0) return probs;
+  const inv = 1 / sum;
+  for (let i = 0; i < out.length; i++) out[i] *= inv;
+  return out;
 }
 
 let net: TextNetwork | null = null;
@@ -58,6 +90,7 @@ let corpus = "";
 let corpusTokens: string[] = [];
 let tokenization: Tokenization = "char";
 let temperature = 0.8;
+let topK = 0; // 0 = disabled (sample from full distribution)
 
 let epoch = 0;
 let lossEMA = 0;
@@ -84,6 +117,7 @@ function init(opts: InitOpts) {
   corpus = normalized.length > 0 ? normalized : " ";
   tokenization = opts.tokenization ?? "char";
   temperature = opts.temperature;
+  if (typeof opts.topK === "number") topK = opts.topK;
   corpusTokens = tokenize(corpus, tokenization);
   if (corpusTokens.length === 0) corpusTokens = [" "];
   const v = buildVocab(corpusTokens);
@@ -206,6 +240,9 @@ self.onmessage = (e: MessageEvent) => {
       if (msg.partial?.temperature != null) {
         temperature = msg.partial.temperature;
       }
+      if (msg.partial?.topK != null) {
+        topK = msg.partial.topK;
+      }
       break;
     case "generate": {
       if (!net) {
@@ -242,7 +279,10 @@ self.onmessage = (e: MessageEvent) => {
       let text = "";
       for (let i = 0; i < length; i++) {
         const { probs } = net.forward(ctx);
-        const next = sampleFromProbs(probs, temp);
+        // Top-K filter: zero out everything except the K most-likely tokens
+        // and renormalize, so the model can't sample low-probability junk.
+        const filtered = applyTopK(probs, topK);
+        const next = sampleFromProbs(filtered, temp);
         generated.push(vocab[next]);
         ctx = ctx.slice(1).concat(next);
 
@@ -264,8 +304,16 @@ self.onmessage = (e: MessageEvent) => {
       const w = msg.payload;
       if (!w || !w.config || !w.weights || !w.vocab) break;
       // Restore the tokenization mode first so the corpus is split the same
-      // way it was when this model was originally trained.
-      tokenization = w.tokenization === "word" ? "word" : "char";
+      // way it was when this model was originally trained. Older saves
+      // pre-date the `tokenization` field — for those, sniff the vocab: any
+      // entry longer than one character can only have come from word-level
+      // tokenization, so default there instead of falling back to "char"
+      // (which produced the "goodbyehaveaniceday" squished-text bug).
+      if (w.tokenization === "word" || w.tokenization === "char") {
+        tokenization = w.tokenization;
+      } else {
+        tokenization = inferTokenizationFromVocab(w.vocab as string[]);
+      }
       const restoredCorpus =
         typeof w.corpus === "string" && w.corpus.length > 0
           ? w.corpus
