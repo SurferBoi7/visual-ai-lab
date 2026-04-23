@@ -7,8 +7,26 @@ import {
   generateTokens,
   joinTokens,
   tokenize,
+  sampleFromProbs,
+  // Re-exported only because makeSample still uses generateTokens for the
+  // training-tick "live dream" preview where stop-sequencing isn't desired.
   type Tokenization,
 } from "./textnet";
+
+// Inference stop sequence — when the model "starts speaking as the user", we
+// cut generation off so the chat reply doesn't run into the next turn. We
+// match a few whitespace-tolerant variants for both char- and word-level
+// tokenization.
+const STOP_SEQUENCES = ["User:", " User:", "\nUser:"];
+
+function findStopCut(text: string): number {
+  let earliest = -1;
+  for (const s of STOP_SEQUENCES) {
+    const idx = text.indexOf(s);
+    if (idx !== -1 && (earliest === -1 || idx < earliest)) earliest = idx;
+  }
+  return earliest;
+}
 
 interface InitOpts {
   corpus: string;
@@ -184,15 +202,42 @@ self.onmessage = (e: MessageEvent) => {
         break;
       }
       const seedTokens = tokenize(msg.seed ?? "", tokenization);
-      const generated = generateTokens(
-        net,
-        vocab,
-        stoi,
-        seedTokens,
-        msg.length ?? 50,
-        msg.temperature ?? temperature,
+      const length = msg.length ?? 50;
+      const temp = msg.temperature ?? temperature;
+      const ctxSize = net.config.contextSize;
+      const padId = stoi[" "] ?? 0;
+
+      // Build the rolling context window from the (possibly empty) seed.
+      const seedIds = seedTokens.map((t) =>
+        stoi[t] !== undefined ? stoi[t] : padId,
       );
-      const text = joinTokens(generated, tokenization);
+      let ctx: number[];
+      if (seedIds.length >= ctxSize) {
+        ctx = seedIds.slice(-ctxSize);
+      } else {
+        ctx = new Array(ctxSize - seedIds.length).fill(padId).concat(seedIds);
+      }
+
+      // Inline generation loop so we can check the stop sequence after each
+      // newly-sampled token and break early when the model "becomes the user".
+      const generated: string[] = [];
+      let text = "";
+      for (let i = 0; i < length; i++) {
+        const { probs } = net.forward(ctx);
+        const next = sampleFromProbs(probs, temp);
+        generated.push(vocab[next]);
+        ctx = ctx.slice(1).concat(next);
+
+        text = joinTokens(generated, tokenization);
+        const cut = findStopCut(text);
+        if (cut !== -1) {
+          // Trim the stop sequence (and any trailing whitespace before it) off
+          // the response so the UI never shows "...thanks  User:".
+          text = text.slice(0, cut).replace(/\s+$/, "");
+          break;
+        }
+      }
+
       postMessage({ type: "generation", id: msg.id, text });
       break;
     }
