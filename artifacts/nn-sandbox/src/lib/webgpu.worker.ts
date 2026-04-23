@@ -84,8 +84,10 @@ async function loadModel(modelId: string, preferred: Device) {
   try {
     generator = (await pipeline("text-generation", modelId, {
       device,
-      // q4 is small + fast and supported by the SmolLM family on WebGPU.
-      dtype: device === "webgpu" ? "q4" : "q8",
+      // q4f16 = 4-bit weights with fp16 activations. Required for compatibility
+      // with AMD/Intel Mac GPUs; plain "q4" silently hangs on first prompt on
+      // those devices. WASM fallback uses q8 which is the most stable CPU dtype.
+      dtype: device === "webgpu" ? "q4f16" : "q8",
       progress_callback: (p: ProgressInfo) => {
         // Stream download / init progress back to the UI.
         const anyP = p as unknown as {
