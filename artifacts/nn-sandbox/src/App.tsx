@@ -149,8 +149,14 @@ function defaultSaveName(
   mode: AppMode,
   modeLabel: string,
   epoch: number,
+  tokenization?: "char" | "word",
 ): string {
-  const tag = mode === "mlp" ? "MLP" : "Char-LM";
+  const tag =
+    mode === "mlp"
+      ? "MLP"
+      : tokenization === "word"
+        ? "Word-LM"
+        : "Char-LM";
   return `${tag} · ${modeLabel} · ep ${epoch}`;
 }
 
@@ -522,7 +528,7 @@ export default function App() {
       });
       worker.postMessage({ type: "exportModel", id });
     });
-  }, [llmConfig.corpus, llmConfig.temperature]);
+  }, [llmConfig.corpus, llmConfig.temperature, llmConfig.tokenization]);
 
   const downloadJSON = (filename: string, payload: unknown) => {
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -711,7 +717,8 @@ export default function App() {
   const isPlaying = mode === "mlp" ? playing : llmPlaying;
   const playLabel = mode === "mlp" ? "Train" : "Train";
 
-  const llmModelLabel = `Char-LM · ${llmConfig.contextSize}→${llmConfig.hiddenSize}→${textSnap.vocabSize}`;
+  const llmModeTag = llmConfig.tokenization === "word" ? "Word-LM" : "Char-LM";
+  const llmModelLabel = `${llmModeTag} · ${llmConfig.contextSize}→${llmConfig.hiddenSize}→${textSnap.vocabSize}`;
 
   // ===== MLP VIEWS =====
   const MLPArchitect = (
@@ -1248,8 +1255,15 @@ export default function App() {
           mode,
           mode === "mlp" ? dataset : llmModelLabel,
           mode === "mlp" ? snap?.epoch ?? 0 : textSnap.epoch,
+          llmConfig.tokenization,
         )}
-        modeLabel={mode === "mlp" ? "MLP Classifier" : "Char-level LM"}
+        modeLabel={
+          mode === "mlp"
+            ? "MLP Classifier"
+            : llmConfig.tokenization === "word"
+              ? "Word-level LM"
+              : "Char-level LM"
+        }
         hasModel={mode === "mlp" ? !!snap : textSnap.epoch > 0}
         onClose={() => setSaveOpen(false)}
         onSaveToLibrary={handleSaveToLibrary}
