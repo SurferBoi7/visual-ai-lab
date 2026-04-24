@@ -12,6 +12,12 @@ import {
   MessageSquare,
   GraduationCap,
   Plus,
+  Globe,
+  Loader2,
+  FileCode2,
+  Hammer,
+  AlertCircle,
+  CheckCircle2,
 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 
@@ -39,6 +45,15 @@ interface Props {
 
 // 1MB hard cap on the corpus to keep the worker from OOM-crashing the tab.
 const MAX_CORPUS_BYTES = 1_000_000;
+
+// Alternating prompts for the Bulk Text Formatter conversation simulation.
+const BULK_USER_PROMPTS = [
+  "tell me a story",
+  "tell me more",
+  "keep going",
+  "what happens next",
+  "continue",
+];
 
 function Card({
   children,
@@ -72,6 +87,7 @@ export function LLMArchitect({
 }: Props) {
   const overBudget = paramCount > maxParams;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploadInfo, setUploadInfo] = useState<{
     name: string;
@@ -82,10 +98,32 @@ export function LLMArchitect({
   const [factQ, setFactQ] = useState("");
   const [factA, setFactA] = useState("");
 
+  // --- Wikipedia Knowledge Fetcher state ---
+  const [wikiTopic, setWikiTopic] = useState("");
+  const [wikiStatus, setWikiStatus] = useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
+  const [wikiMsg, setWikiMsg] = useState("");
+
+  // --- Bulk Text Formatter state ---
+  const [bulkFormatInfo, setBulkFormatInfo] = useState<{
+    name: string;
+    paragraphs: number;
+  } | null>(null);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+
+  const appendToCorpus = (block: string) => {
+    const sep =
+      config.corpus.endsWith("\n") || config.corpus.length === 0 ? "" : "\n";
+    const next = (config.corpus + sep + block + "\n").slice(
+      0,
+      MAX_CORPUS_BYTES,
+    );
+    onChange({ ...config, corpus: next });
+  };
+
   // Generate 4-5 hardcoded phrasings of the user's question and append them to
-  // the corpus as `User: <q>\nBot: <a>` pairs. This is the "Fact Teacher"
-  // shortcut for hammering a single fact into the model from many angles
-  // without making the user hand-type every variation.
+  // the corpus as `User: <q>\nBot: <a>` pairs.
   const addFactVariations = () => {
     const q = factQ.trim().replace(/[?.!]+$/g, "");
     const a = factA.trim();
@@ -97,14 +135,109 @@ export function LLMArchitect({
       `Can you tell me ${q}?`,
       `Do you know ${q}?`,
     ];
-    const block = variations
-      .map((v) => `User: ${v}\nBot: ${a}`)
-      .join("\n");
-    const sep = config.corpus.endsWith("\n") || config.corpus.length === 0 ? "" : "\n";
-    const next = (config.corpus + sep + block + "\n").slice(0, MAX_CORPUS_BYTES);
-    onChange({ ...config, corpus: next });
+    const block = variations.map((v) => `User: ${v}\nBot: ${a}`).join("\n");
+    appendToCorpus(block);
     setFactQ("");
     setFactA("");
+  };
+
+  // Wikipedia Knowledge Fetcher
+  const fetchWikipedia = async () => {
+    const topic = wikiTopic.trim();
+    if (!topic) return;
+    setWikiStatus("loading");
+    setWikiMsg("");
+    try {
+      const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`;
+      const res = await fetch(url);
+      if (res.status === 404) {
+        setWikiStatus("error");
+        setWikiMsg(`No Wikipedia page found for "${topic}".`);
+        return;
+      }
+      if (!res.ok) {
+        setWikiStatus("error");
+        setWikiMsg(`Wikipedia returned an error (${res.status}). Try again.`);
+        return;
+      }
+      const data = await res.json();
+      const extract: string = data.extract ?? "";
+      if (!extract) {
+        setWikiStatus("error");
+        setWikiMsg("Wikipedia returned an empty summary for this topic.");
+        return;
+      }
+      const block = `User: tell me about ${topic}\nBot: ${extract}`;
+      const corpusBytes = new Blob([config.corpus]).size;
+      const blockBytes = new Blob([block]).size;
+      if (corpusBytes + blockBytes > MAX_CORPUS_BYTES) {
+        setWikiStatus("error");
+        setWikiMsg(
+          "Corpus is full (1 MB limit). Remove some text before adding more.",
+        );
+        return;
+      }
+      appendToCorpus(block);
+      setWikiStatus("success");
+      setWikiMsg(`Added Wikipedia summary for "${topic}".`);
+      setWikiTopic("");
+    } catch {
+      setWikiStatus("error");
+      setWikiMsg("Network error — check your connection and try again.");
+    }
+  };
+
+  // Bulk Text Formatter
+  const handleBulkFile = (files: FileList | null) => {
+    setBulkError(null);
+    setBulkFormatInfo(null);
+    const f = files?.[0];
+    if (!f) return;
+    if (!/\.txt$/i.test(f.name) && !f.type.startsWith("text/")) {
+      setBulkError("Only .txt files are supported.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => setBulkError("Could not read that file.");
+    reader.onload = () => {
+      const raw = String(reader.result ?? "");
+      // Split by double newline first, fall back to single newline.
+      const rawParagraphs = raw.split(/\n\n+/).flatMap((chunk) => {
+        const trimmed = chunk.trim();
+        if (!trimmed) return [];
+        // If the chunk itself has multiple lines, keep as-is (it's a paragraph).
+        return [trimmed];
+      });
+      const paragraphs = rawParagraphs.filter((p) => p.length > 0);
+      if (paragraphs.length === 0) {
+        setBulkError("No usable paragraphs found in that file.");
+        return;
+      }
+      const block = paragraphs
+        .map(
+          (p, i) =>
+            `User: ${BULK_USER_PROMPTS[i % BULK_USER_PROMPTS.length]}\nBot: ${p}`,
+        )
+        .join("\n");
+      const corpusBytes = new Blob([config.corpus]).size;
+      const blockBytes = new Blob([block]).size;
+      const combined = config.corpus + (config.corpus.endsWith("\n") || config.corpus.length === 0 ? "" : "\n") + block + "\n";
+      const truncated = combined.length > MAX_CORPUS_BYTES;
+      onChange({ ...config, corpus: combined.slice(0, MAX_CORPUS_BYTES) });
+      setBulkFormatInfo({
+        name: f.name,
+        paragraphs: paragraphs.length,
+      });
+      if (truncated) {
+        setBulkError(
+          `Corpus hit the 1 MB limit — some paragraphs were truncated.`,
+        );
+      }
+      // Reset the file input so the same file can be re-selected.
+      if (bulkFileInputRef.current) bulkFileInputRef.current.value = "";
+      void corpusBytes; void blockBytes;
+    };
+    reader.readAsText(f);
   };
 
   const isWord = config.tokenization === "word";
@@ -417,7 +550,7 @@ export function LLMArchitect({
           </div>
         )}
 
-        {/* Fact Teacher — synthesise multiple Q/A phrasings from one fact */}
+        {/* Fact Teacher */}
         <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2.5">
           <div className="flex items-center gap-2">
             <GraduationCap className="size-4 text-emerald-300" />
@@ -454,10 +587,131 @@ export function LLMArchitect({
           </button>
         </div>
 
+        {/* ── Data Forge ── */}
+        <div className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-3 space-y-4">
+          <div className="flex items-center gap-2">
+            <Hammer className="size-4 text-violet-300" />
+            <span className="text-xs font-semibold text-violet-100">
+              Data Forge
+            </span>
+          </div>
+          <p className="text-[10px] text-violet-100/70 leading-relaxed">
+            Automated corpus-generation tools. Results are appended to the
+            corpus below and immediately ready to train on.
+          </p>
+
+          {/* Wikipedia Knowledge Fetcher */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <Globe className="size-3.5 text-sky-300" />
+              <span className="text-[11px] font-semibold text-slate-200">
+                Wikipedia Knowledge Fetcher
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-500">
+              Fetches a Wikipedia summary and formats it as a{" "}
+              <code className="font-mono">User:/Bot:</code> Q&A pair.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={wikiTopic}
+                onChange={(e) => {
+                  setWikiTopic(e.target.value);
+                  setWikiStatus("idle");
+                  setWikiMsg("");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") fetchWikipedia();
+                }}
+                placeholder="Topic (e.g. Quantum Mechanics)"
+                className="flex-1 min-h-[36px] rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+              />
+              <button
+                type="button"
+                onClick={fetchWikipedia}
+                disabled={!wikiTopic.trim() || wikiStatus === "loading"}
+                className="min-h-[36px] px-3 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-sky-100 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+              >
+                {wikiStatus === "loading" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Globe className="size-3.5" />
+                )}
+                {wikiStatus === "loading" ? "Fetching…" : "Fetch & Learn"}
+              </button>
+            </div>
+
+            {wikiStatus === "success" && (
+              <div className="flex items-start gap-1.5 text-[10px] text-emerald-300">
+                <CheckCircle2 className="size-3.5 shrink-0 mt-0.5" />
+                {wikiMsg}
+              </div>
+            )}
+            {wikiStatus === "error" && (
+              <div className="flex items-start gap-1.5 text-[10px] text-rose-300">
+                <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+                {wikiMsg}
+              </div>
+            )}
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-violet-500/20" />
+
+          {/* Bulk Text Formatter */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <FileCode2 className="size-3.5 text-fuchsia-300" />
+              <span className="text-[11px] font-semibold text-slate-200">
+                Bulk Text Formatter
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-500">
+              Upload a raw <code className="font-mono">.txt</code> file.
+              Paragraphs are split and wrapped in alternating{" "}
+              <code className="font-mono">User:/Bot:</code> turns automatically.
+            </p>
+            <button
+              type="button"
+              onClick={() => bulkFileInputRef.current?.click()}
+              className="w-full min-h-[38px] rounded-lg bg-fuchsia-500/20 hover:bg-fuchsia-500/30 border border-fuchsia-400/40 text-fuchsia-100 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition"
+            >
+              <FileCode2 className="size-3.5" />
+              Upload Raw Text File
+            </button>
+            <input
+              ref={bulkFileInputRef}
+              type="file"
+              accept=".txt,text/plain"
+              className="hidden"
+              onChange={(e) => handleBulkFile(e.target.files)}
+            />
+
+            {bulkFormatInfo && (
+              <div className="flex items-start gap-1.5 text-[10px] text-emerald-300">
+                <CheckCircle2 className="size-3.5 shrink-0 mt-0.5" />
+                <span>
+                  <span className="font-semibold">{bulkFormatInfo.name}</span>{" "}
+                  — {bulkFormatInfo.paragraphs} paragraph
+                  {bulkFormatInfo.paragraphs !== 1 ? "s" : ""} formatted and
+                  appended.
+                </span>
+              </div>
+            )}
+            {bulkError && (
+              <div className="flex items-start gap-1.5 text-[10px] text-rose-300">
+                <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+                {bulkError}
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Manual fallback */}
         <div className="space-y-1.5">
           <label className="text-[10px] uppercase tracking-wider text-slate-500">
-            Or paste / edit text
+            Paste / edit text
           </label>
           <textarea
             value={config.corpus}
