@@ -489,17 +489,24 @@ export default function App() {
         }
         const id = `g-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         pendingGenRef.current.set(id, resolve);
+
+        // Build a seed that strictly mirrors the normalized corpus format so
+        // the model is primed to output the bot's turn immediately:
+        //   "[system prompt] user [message] bot "
+        //
+        // The trailing "bot " forces the model to predict the next token
+        // *after* the speaker tag rather than wasting capacity re-generating
+        // the tag itself (which caused hallucinations and empty replies).
+        const normalizedInput = normalizePromptForLLM(seed);
+        const systemPart = llmConfig.systemPrompt
+          ? normalizePromptForLLM(llmConfig.systemPrompt) + " "
+          : "";
+        const formattedSeed = `${systemPart}user ${normalizedInput} bot `;
+
         worker.postMessage({
           type: "generate",
           id,
-          // Invisibly prepend the persona-locking system prompt, then
-          // normalize the combined seed before it crosses the worker boundary
-          // so it matches the lowercased / punctuation-free vocabulary the
-          // network was trained on. The worker also normalizes defensively.
-          seed: normalizePromptForLLM(
-            (llmConfig.systemPrompt ? llmConfig.systemPrompt + " " : "") +
-              seed,
-          ),
+          seed: formattedSeed,
           length: 50,
           temperature: llmConfig.temperature,
         });

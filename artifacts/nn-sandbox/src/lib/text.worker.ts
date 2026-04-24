@@ -300,7 +300,14 @@ self.onmessage = (e: MessageEvent) => {
         }
       }
 
-      postMessage({ type: "generation", id: msg.id, text });
+      // Strip a leading "bot" speaker tag in case the model re-emits it at
+      // the very start of its output (can occur when the seed context window
+      // is short and "bot" falls just outside the attended tokens).  Only
+      // remove it when it appears as an isolated word at position 0 so we
+      // never silently eat legitimate content that starts with "bot".
+      const cleaned = text.replace(/^bot\s+/i, "").trim();
+
+      postMessage({ type: "generation", id: msg.id, text: cleaned });
       break;
     }
     case "loadWeights": {
