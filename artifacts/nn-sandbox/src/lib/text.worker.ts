@@ -14,10 +14,14 @@ import {
 } from "./textnet";
 
 // Inference stop sequence — when the model "starts speaking as the user", we
-// cut generation off so the chat reply doesn't run into the next turn. We
-// match a few whitespace-tolerant variants for both char- and word-level
-// tokenization.
-const STOP_SEQUENCES = ["User:", " User:", "\nUser:"];
+// cut generation off so the chat reply doesn't run into the next turn.
+//
+// The text normalizer lowercases everything and strips punctuation, so
+// "User:" in the training corpus becomes the plain token "user". We match
+// both the bare form (first generated token) and the space-prefixed form
+// (mid-sequence, which is the common case for both char- and word-level
+// tokenization after normalisation collapses whitespace).
+const STOP_SEQUENCES = ["user", " user"];
 
 // Lowercase, strip punctuation, collapse whitespace. Used on every piece of
 // text that flows into the model — both the training corpus and live chat
