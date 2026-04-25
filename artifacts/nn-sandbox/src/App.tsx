@@ -1125,127 +1125,21 @@ export default function App() {
         </div>
       </header>
 
-      <main className="lg:hidden px-3 pt-4 pb-28">
-        {tab === "architect" && ArchitectContent}
-        {tab === "brain" && BrainContent}
-        {tab === "output" && OutputContent}
-        {tab === "library" && LibraryContent}
+      {/* ── Unified tab content — all screen sizes ───────────────────────── */}
+      <main
+        className="overflow-y-auto w-full pb-28"
+        style={{ height: "calc(100vh - 3.5rem)" }}
+      >
+        <div className="max-w-5xl mx-auto flex flex-col gap-6 p-4">
+          {tab === "architect" && ArchitectContent}
+          {tab === "brain" && BrainContent}
+          {tab === "output" && OutputContent}
+          {tab === "library" && LibraryContent}
+        </div>
       </main>
 
-      {/* ── MLP Desktop Layout (lg+) ──────────────────────────────────────── */}
-      {mode === "mlp" && (
-        <main className="hidden lg:grid grid-cols-12 gap-4 p-4 lg:p-6">
-          <aside className="col-span-4 lg:col-span-3 space-y-4">
-            {ArchitectContent}
-            {LibraryContent}
-          </aside>
-          <section className="col-span-8 lg:col-span-9 space-y-4">
-            {BrainContent}
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <div className="space-y-4">
-                <Card className="p-5">
-                  <div className="flex items-center justify-between mb-3 gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-slate-100">
-                        2D Point Classifier
-                      </div>
-                      <div className="text-[11px] text-slate-400 truncate">
-                        The network learns to color the plane based on (x, y).
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 text-[11px] text-slate-400">
-                      <span className="flex items-center gap-1.5">
-                        <span className="size-2.5 rounded-full bg-sky-400" /> A
-                      </span>
-                      <span className="flex items-center gap-1.5">
-                        <span className="size-2.5 rounded-full bg-emerald-400" />{" "}
-                        B
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex justify-center">
-                    <div className="w-full max-w-[380px] aspect-square">
-                      <ResponsiveDataView snap={snap} />
-                    </div>
-                  </div>
-                </Card>
-                <Card className="p-5">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Activity className="size-4 text-emerald-400" />
-                    <span className="text-sm font-semibold text-slate-100">
-                      Training Stats
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <Stat label="Epoch" value={snap?.epoch ?? 0} />
-                    <Stat
-                      label="Loss"
-                      value={snap ? snap.loss.toFixed(3) : "—"}
-                    />
-                    <Stat
-                      label="Acc"
-                      value={snap ? `${(snap.accuracy * 100).toFixed(0)}%` : "—"}
-                    />
-                  </div>
-                </Card>
-              </div>
-              <SharingHub
-                mode="mlp"
-                onDownload={handleOpenSave}
-                hasModel={!!snap}
-              />
-            </div>
-          </section>
-        </main>
-      )}
-
-      {/* ── LLM Desktop Chat Layout (lg+) — sidebar + main ──────────────── */}
-      {mode === "llm" && (
-        <main
-          className="hidden lg:flex overflow-hidden"
-          style={{ height: "calc(100vh - 3.5rem)" }}
-        >
-          {/* ── Left Sidebar ─────────────────────────────────────────────── */}
-          <aside className="w-[380px] shrink-0 flex flex-col overflow-hidden border-r border-apple-divider/10 bg-apple-bg">
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {LLMArchitectView}
-              {LibraryContent}
-              <SharingHub
-                mode="llm"
-                onDownload={handleOpenSave}
-                hasModel={llmHasModel}
-              />
-            </div>
-          </aside>
-
-          {/* ── Main Chat Area ────────────────────────────────────────────── */}
-          <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-apple-bg">
-            {/* Telemetry strip */}
-            <div className="shrink-0 border-b border-apple-divider/10 bg-apple-card/20 px-4 py-2">
-              <LLMStats
-                modelLabel={llmModelLabel}
-                epoch={textSnap.epoch}
-                loss={textSnap.loss}
-                paramCount={textSnap.paramCount}
-                vocabSize={textSnap.vocabSize}
-                contextSize={textSnap.contextSize}
-                hiddenSize={textSnap.hiddenSize}
-                tokensPerSecond={textSnap.tokensPerSecond}
-                trainedSamples={textSnap.trainedSamples}
-                messageCount={messages.length}
-                liveSample={textSnap.sample}
-                tokenization={llmConfig.tokenization}
-              />
-            </div>
-            {/* Chat view — fills remaining height */}
-            <div className="flex-1 min-h-0 p-4 overflow-hidden">
-              {LLMBrain}
-            </div>
-          </div>
-        </main>
-      )}
-
-      <nav className="lg:hidden fixed bottom-0 inset-x-0 z-20 border-t border-apple-divider/10 bg-apple-bg/95 backdrop-blur-lg">
+      {/* ── Tab nav — visible on all screen sizes ────────────────────────── */}
+      <nav className="fixed bottom-0 inset-x-0 z-20 border-t border-apple-divider/10 bg-apple-bg/95 backdrop-blur-lg">
         <div className="grid grid-cols-4">
           {tabs.map((t) => {
             const Icon = t.icon;
