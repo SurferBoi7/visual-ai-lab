@@ -705,6 +705,52 @@ export default function App() {
     });
   };
 
+  const handleImportModel = (json: string) => {
+    try {
+      const parsed = JSON.parse(json) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== "object") {
+        toast({ title: "Import failed", description: "Invalid file." });
+        return;
+      }
+      const kind = parsed.kind as string | undefined;
+      if (kind === "char-lm") {
+        const model: SavedModel = {
+          id: makeId(),
+          name: (parsed.name as string | undefined) ?? "Imported Model",
+          type: "Char-LM",
+          date: Date.now(),
+          paramsCount: 0,
+          loss: (parsed.loss as number | undefined) ?? 0,
+          epoch: (parsed.epoch as number | undefined) ?? 0,
+          weights: parsed as unknown as CharLMWeights,
+        };
+        handleLoadModel(model);
+      } else if (kind === "mlp") {
+        const model: SavedModel = {
+          id: makeId(),
+          name: (parsed.name as string | undefined) ?? "Imported Model",
+          type: "MLP",
+          date: Date.now(),
+          paramsCount: 0,
+          loss: 0,
+          epoch: 0,
+          weights: parsed as unknown as MLPWeights,
+        };
+        handleLoadModel(model);
+      } else {
+        toast({
+          title: "Import failed",
+          description: "Unrecognized model format.",
+        });
+      }
+    } catch {
+      toast({
+        title: "Import failed",
+        description: "Could not parse the JSON file.",
+      });
+    }
+  };
+
   const handleModeChange = (m: AppMode) => {
     if (m === mode) return;
     setMode(m);
@@ -945,7 +991,7 @@ export default function App() {
         </div>
       </Card>
 
-      <SharingHub mode="mlp" onDownload={handleOpenSave} hasModel={!!snap} />
+      <SharingHub mode="mlp" onDownload={handleOpenSave} hasModel={!!snap} onImport={handleImportModel} />
     </div>
   );
 
@@ -1021,7 +1067,7 @@ export default function App() {
         liveSample={textSnap.sample}
         tokenization={llmConfig.tokenization}
       />
-      <SharingHub mode="llm" onDownload={handleOpenSave} hasModel={llmHasModel} />
+      <SharingHub mode="llm" onDownload={handleOpenSave} hasModel={llmHasModel} onImport={handleImportModel} />
     </div>
   );
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Bot, User, Loader2, Sparkles, Wand2 } from "lucide-react";
+import { Send, Bot, User, Loader2, Sparkles, Wand2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export interface ChatMessage {
@@ -81,15 +81,27 @@ export function ChatView({
             </div>
           </div>
         </div>
-        <span
-          className={`text-[10px] px-2 py-0.5 rounded-full border shrink-0 ${
-            isTraining
-              ? "bg-sky-500/15 text-sky-300 border-sky-500/30 animate-pulse"
-              : "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
-          }`}
-        >
-          {isTraining ? "training…" : "idle"}
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          {messages.length > 0 && (
+            <button
+              onClick={() => setMessages([])}
+              className="flex items-center gap-1 text-[11px] text-apple-mid hover:text-red-400 transition-colors px-2 py-1 rounded-lg hover:bg-red-500/10"
+              aria-label="Clear chat"
+            >
+              <Trash2 className="size-3" />
+              Clear
+            </button>
+          )}
+          <span
+            className={`text-[10px] px-2 py-0.5 rounded-full border ${
+              isTraining
+                ? "bg-sky-500/15 text-sky-300 border-sky-500/30 animate-pulse"
+                : "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+            }`}
+          >
+            {isTraining ? "training…" : "idle"}
+          </span>
+        </div>
       </div>
 
       {/* Live generation banner */}

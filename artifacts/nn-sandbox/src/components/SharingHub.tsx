@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Download,
+  Upload,
   Code2,
   Sparkles,
   Cloud,
@@ -19,6 +20,7 @@ interface Props {
   mode: "mlp" | "llm";
   onDownload: () => void;
   hasModel: boolean;
+  onImport?: (json: string) => void;
 }
 
 const MLP_SNIPPET = `// Load your trained model
@@ -63,11 +65,13 @@ function makeId() {
   return Math.random().toString(36).slice(2, 9);
 }
 
-export function SharingHub({ mode, onDownload, hasModel }: Props) {
+export function SharingHub({ mode, onDownload, hasModel, onImport }: Props) {
   const { toast } = useToast();
   const [publishing, setPublishing] = useState(false);
   const [shareId, setShareId] = useState<string | null>(null);
   const [copied, setCopied] = useState<"link" | "embed" | null>(null);
+  const [importOk, setImportOk] = useState(false);
+  const importRef = useRef<HTMLInputElement | null>(null);
 
   const snippet = mode === "mlp" ? MLP_SNIPPET : LLM_SNIPPET;
   const fileLabel = mode === "mlp" ? "weights.json" : "adapter.safetensors";
@@ -107,6 +111,21 @@ export function SharingHub({ mode, onDownload, hasModel }: Props) {
     }
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const json = ev.target?.result as string;
+      if (!json) return;
+      onImport?.(json);
+      setImportOk(true);
+      setTimeout(() => setImportOk(false), 2000);
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
   const tweetUrl = shareId
     ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(
         `I trained a tiny ${mode === "mlp" ? "neural network" : "LLM"} in my browser →`,
@@ -132,15 +151,52 @@ export function SharingHub({ mode, onDownload, hasModel }: Props) {
             </div>
           </div>
         </div>
-        <Button
-          size="sm"
-          onClick={onDownload}
-          disabled={!hasModel}
-          className="gap-1.5 min-h-[44px] sm:min-h-[36px] rounded-xl"
-        >
-          <Download className="size-3.5" />
-          {fileLabel}
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Import Model */}
+          {onImport && (
+            <>
+              <input
+                ref={importRef}
+                type="file"
+                accept=".json"
+                className="hidden"
+                onChange={handleFileChange}
+              />
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => importRef.current?.click()}
+                className={`gap-1.5 min-h-[44px] sm:min-h-[36px] rounded-xl transition-colors ${
+                  importOk
+                    ? "bg-emerald-600 hover:bg-emerald-600 text-white border-emerald-500"
+                    : ""
+                }`}
+              >
+                {importOk ? (
+                  <>
+                    <Check className="size-3.5" />
+                    Model Loaded!
+                  </>
+                ) : (
+                  <>
+                    <Upload className="size-3.5" />
+                    Import
+                  </>
+                )}
+              </Button>
+            </>
+          )}
+          {/* Export / Download */}
+          <Button
+            size="sm"
+            onClick={onDownload}
+            disabled={!hasModel}
+            className="gap-1.5 min-h-[44px] sm:min-h-[36px] rounded-xl"
+          >
+            <Download className="size-3.5" />
+            {fileLabel}
+          </Button>
+        </div>
       </div>
 
       {/* Code snippet */}
