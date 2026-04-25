@@ -261,7 +261,7 @@ self.onmessage = (e: MessageEvent) => {
       // training corpus so the seed lands in the model's known vocabulary
       // (e.g. "What is the Sky's colour?" → "what is the skys colour").
       const seedTokens = tokenize(normalizeText(msg.seed ?? ""), tokenization);
-      const length = msg.length ?? 50;
+      const length = msg.length ?? 300;
       const temp = msg.temperature ?? temperature;
       const ctxSize = net.config.contextSize;
       const padId = stoi[" "] ?? 0;

@@ -507,7 +507,7 @@ export default function App() {
           type: "generate",
           id,
           seed: formattedSeed,
-          length: 50,
+          length: 300,
           temperature: llmConfig.temperature,
         });
       }),
