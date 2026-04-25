@@ -1,0 +1,26 @@
+Act as a Senior Frontend UX/UI Engineer. We need to overhaul the layout and color scheme of our AI Lab. The current desktop UI is a cluttered 3-column dashboard. We want to redesign the desktop layout to resemble a standard AI chat interface (a left sidebar for tools, and a wide main area for the chat), while applying a specific Apple-style color palette.
+
+CRITICAL DIRECTIVE: Do NOT modify ANY React state, worker logic, or component functionality. This is strictly a CSS/Tailwind and layout reorganization task inside `App.tsx` and the component wrappers.
+
+### 1. Apply the Apple Style Color Palette
+Define these exact hex codes in the global CSS or Tailwind config and apply them across the entire app (both mobile and desktop):
+* Primary/Buttons/Links: `#007AFF` (Apple Blue)
+* Background (Dark Mode): `#1C1C1E` (Apple Dark Gray)
+* Cards/Panels/Secondary Elements (Dark Mode): `#3A3A3C` (Apple Dark Gray 2)
+* Disabled Text/Subtle Icons: `#8E8E93` (Apple Mid Gray)
+* Dividers/Borders: `#E5E5EA` (Apple Light Gray) - Use carefully in dark mode, or use a low-opacity version.
+* Success/Confirmations: `#34C759` (Apple Green)
+* Warnings: `#FF9500` (Apple Orange)
+* Errors: `#FF3B30` (Apple Red)
+* Caution/Notifications: `#FFCC00` (Apple Yellow)
+(Make the app a cohesive Dark Mode using the Dark Grays for backgrounds/cards, and the vibrant colors for accents and buttons).
+
+### 2. Desktop Layout Redesign (Screens >= 1024px)
+Change the main layout in `App.tsx` from its current grid/columns to a clean 2-column flex or grid layout:
+* **Left Sidebar (Width: ~350px - 400px):** Make this a fixed, independently scrollable sidebar. Move the `Tiny-LM Architecture` sliders, the `Data Forge` (Wikipedia/Bulk), and the `Corpus Library` (Dataset Manager) into this sidebar. 
+* **Main Content Area (Flex: 1):** This should be the wide, central focus of the screen. Place the `Chat / Live Generation` view here so it spans beautifully like a standard AI chat UI. 
+* **Top/Bottom Elements:** Move the `LLM Telemetry` panel so it sits neatly at the top or bottom of the Main Content Area. Move the "Export & Share" to the top right of the screen or bottom of the sidebar.
+
+### 3. Mobile Layout Preservation
+* For mobile screens (< 1024px), keep the current stacked layout where everything scrolls vertically.
+* Ensure the new color palette is applied to all mobile components (buttons, backgrounds, borders) without changing their structural arrangement.

@@ -169,7 +169,7 @@ function Card({
 }) {
   return (
     <div
-      className={`bg-slate-800/50 rounded-2xl border border-slate-700 backdrop-blur-md ${className}`}
+      className={`bg-apple-card/40 rounded-2xl border border-apple-divider/10 backdrop-blur-md ${className}`}
     >
       {children}
     </div>
@@ -1050,8 +1050,8 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900 text-slate-100">
-      <header className="sticky top-0 z-20 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md">
+    <div className="min-h-screen bg-apple-bg text-slate-100">
+      <header className="sticky top-0 z-20 border-b border-apple-divider/10 bg-apple-bg/90 backdrop-blur-md">
         <div className="px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="size-8 rounded-lg bg-gradient-to-br from-sky-500 to-emerald-500 flex items-center justify-center shrink-0">
@@ -1125,21 +1125,22 @@ export default function App() {
         </div>
       </header>
 
-      <main className="md:hidden px-3 pt-4 pb-28">
+      <main className="lg:hidden px-3 pt-4 pb-28">
         {tab === "architect" && ArchitectContent}
         {tab === "brain" && BrainContent}
         {tab === "output" && OutputContent}
         {tab === "library" && LibraryContent}
       </main>
 
-      <main className="hidden md:grid grid-cols-12 gap-4 p-4 lg:p-6">
-        <aside className="col-span-4 lg:col-span-3 space-y-4">
-          {ArchitectContent}
-          {LibraryContent}
-        </aside>
-        <section className="col-span-8 lg:col-span-9 space-y-4">
-          {BrainContent}
-          {mode === "mlp" ? (
+      {/* ── MLP Desktop Layout (lg+) ──────────────────────────────────────── */}
+      {mode === "mlp" && (
+        <main className="hidden lg:grid grid-cols-12 gap-4 p-4 lg:p-6">
+          <aside className="col-span-4 lg:col-span-3 space-y-4">
+            {ArchitectContent}
+            {LibraryContent}
+          </aside>
+          <section className="col-span-8 lg:col-span-9 space-y-4">
+            {BrainContent}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
               <div className="space-y-4">
                 <Card className="p-5">
@@ -1183,9 +1184,7 @@ export default function App() {
                     />
                     <Stat
                       label="Acc"
-                      value={
-                        snap ? `${(snap.accuracy * 100).toFixed(0)}%` : "—"
-                      }
+                      value={snap ? `${(snap.accuracy * 100).toFixed(0)}%` : "—"}
                     />
                   </div>
                 </Card>
@@ -1196,8 +1195,33 @@ export default function App() {
                 hasModel={!!snap}
               />
             </div>
-          ) : (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          </section>
+        </main>
+      )}
+
+      {/* ── LLM Desktop Chat Layout (lg+) — sidebar + main ──────────────── */}
+      {mode === "llm" && (
+        <main
+          className="hidden lg:flex overflow-hidden"
+          style={{ height: "calc(100vh - 3.5rem)" }}
+        >
+          {/* ── Left Sidebar ─────────────────────────────────────────────── */}
+          <aside className="w-[380px] shrink-0 flex flex-col overflow-hidden border-r border-apple-divider/10 bg-apple-bg">
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {LLMArchitectView}
+              {LibraryContent}
+              <SharingHub
+                mode="llm"
+                onDownload={handleOpenSave}
+                hasModel={llmHasModel}
+              />
+            </div>
+          </aside>
+
+          {/* ── Main Chat Area ────────────────────────────────────────────── */}
+          <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-apple-bg">
+            {/* Telemetry strip */}
+            <div className="shrink-0 border-b border-apple-divider/10 bg-apple-card/20 px-4 py-2">
               <LLMStats
                 modelLabel={llmModelLabel}
                 epoch={textSnap.epoch}
@@ -1210,19 +1234,18 @@ export default function App() {
                 trainedSamples={textSnap.trainedSamples}
                 messageCount={messages.length}
                 liveSample={textSnap.sample}
-        tokenization={llmConfig.tokenization}
-              />
-              <SharingHub
-                mode="llm"
-                onDownload={handleOpenSave}
-                hasModel={llmHasModel}
+                tokenization={llmConfig.tokenization}
               />
             </div>
-          )}
-        </section>
-      </main>
+            {/* Chat view — fills remaining height */}
+            <div className="flex-1 min-h-0 p-4 overflow-hidden">
+              {LLMBrain}
+            </div>
+          </div>
+        </main>
+      )}
 
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-20 border-t border-slate-800 bg-slate-950/90 backdrop-blur-lg">
+      <nav className="lg:hidden fixed bottom-0 inset-x-0 z-20 border-t border-apple-divider/10 bg-apple-bg/95 backdrop-blur-lg">
         <div className="grid grid-cols-4">
           {tabs.map((t) => {
             const Icon = t.icon;
@@ -1284,8 +1307,8 @@ export default function App() {
 
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-xl border border-slate-700 bg-slate-900/60 px-2 py-3 text-center">
-      <div className="text-[10px] uppercase tracking-wider text-slate-400">
+    <div className="rounded-xl border border-apple-divider/10 bg-apple-card/30 px-2 py-3 text-center">
+      <div className="text-[10px] uppercase tracking-wider text-apple-mid">
         {label}
       </div>
       <div className="text-sm font-semibold tabular-nums text-slate-100 mt-0.5">

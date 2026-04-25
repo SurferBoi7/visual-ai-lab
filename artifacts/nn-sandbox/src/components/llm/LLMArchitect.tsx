@@ -79,7 +79,7 @@ function Card({
 }) {
   return (
     <div
-      className={`bg-slate-800/50 rounded-2xl border border-slate-700 backdrop-blur-md ${className}`}
+      className={`bg-apple-card/40 rounded-2xl border border-apple-divider/10 backdrop-blur-md ${className}`}
     >
       {children}
     </div>

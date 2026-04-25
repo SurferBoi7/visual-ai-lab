@@ -5,6 +5,17 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* ── Apple HIG Color Palette ── */
+  --color-apple-blue:    #007AFF;
+  --color-apple-bg:      #1C1C1E;
+  --color-apple-card:    #3A3A3C;
+  --color-apple-mid:     #8E8E93;
+  --color-apple-divider: #E5E5EA;
+  --color-apple-green:   #34C759;
+  --color-apple-orange:  #FF9500;
+  --color-apple-red:     #FF3B30;
+  --color-apple-yellow:  #FFCC00;
+
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
   --color-border: hsl(var(--border));
@@ -66,48 +77,58 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* LIGHT MODE (unused — app forces dark) */
+/* Apple HIG Dark Mode — primary theme */
 :root {
-  --button-outline: rgba(0,0,0, .10);
-  --badge-outline: rgba(0,0,0, .05);
-  --opaque-button-border-intensity: -8;
-  --elevate-1: rgba(0,0,0, .03);
-  --elevate-2: rgba(0,0,0, .08);
+  --button-outline: rgba(255,255,255, .10);
+  --badge-outline: rgba(255,255,255, .05);
+  --opaque-button-border-intensity: 9;
+  --elevate-1: rgba(255,255,255, .04);
+  --elevate-2: rgba(255,255,255, .09);
 
-  --background: 222 47% 8%;
-  --foreground: 210 40% 96%;
-  --border: 217 33% 18%;
-  --card: 222 44% 11%;
-  --card-foreground: 210 40% 96%;
-  --card-border: 217 33% 18%;
-  --sidebar: 222 47% 9%;
-  --sidebar-foreground: 210 40% 96%;
-  --sidebar-border: 217 33% 18%;
-  --sidebar-primary: 199 89% 48%;
-  --sidebar-primary-foreground: 222 47% 8%;
-  --sidebar-accent: 217 33% 16%;
-  --sidebar-accent-foreground: 210 40% 96%;
-  --sidebar-ring: 199 89% 48%;
-  --popover: 222 44% 11%;
-  --popover-foreground: 210 40% 96%;
-  --popover-border: 217 33% 18%;
-  --primary: 199 89% 56%;
-  --primary-foreground: 222 47% 8%;
-  --secondary: 217 33% 16%;
-  --secondary-foreground: 210 40% 96%;
-  --muted: 217 33% 14%;
-  --muted-foreground: 215 20% 65%;
-  --accent: 217 33% 18%;
-  --accent-foreground: 210 40% 96%;
-  --destructive: 0 84% 60%;
-  --destructive-foreground: 210 40% 96%;
-  --input: 217 33% 18%;
-  --ring: 199 89% 56%;
-  --chart-1: 199 89% 56%;
-  --chart-2: 142 71% 55%;
-  --chart-3: 38 92% 60%;
-  --chart-4: 0 84% 65%;
-  --chart-5: 270 70% 60%;
+  /* Apple #1C1C1E */
+  --background: 240 3% 11%;
+  --foreground: 0 0% 95%;
+  /* Apple divider ~#3D3D3F */
+  --border: 240 3% 25%;
+  /* Apple #2C2C2E (between bg and card) */
+  --card: 240 2% 17%;
+  --card-foreground: 0 0% 95%;
+  --card-border: 240 3% 25%;
+  /* Sidebar = same as bg */
+  --sidebar: 240 3% 11%;
+  --sidebar-foreground: 0 0% 95%;
+  --sidebar-border: 240 3% 25%;
+  /* Apple Blue #007AFF */
+  --sidebar-primary: 211 100% 50%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 240 2% 20%;
+  --sidebar-accent-foreground: 0 0% 95%;
+  --sidebar-ring: 211 100% 50%;
+  --popover: 240 2% 17%;
+  --popover-foreground: 0 0% 95%;
+  --popover-border: 240 3% 25%;
+  /* Apple Blue #007AFF */
+  --primary: 211 100% 50%;
+  --primary-foreground: 0 0% 100%;
+  /* Apple #3A3A3C */
+  --secondary: 240 2% 23%;
+  --secondary-foreground: 0 0% 95%;
+  --muted: 240 2% 18%;
+  /* Apple Mid Gray #8E8E93 */
+  --muted-foreground: 240 2% 57%;
+  --accent: 240 2% 23%;
+  --accent-foreground: 0 0% 95%;
+  /* Apple Red #FF3B30 */
+  --destructive: 3 100% 59%;
+  --destructive-foreground: 0 0% 100%;
+  --input: 240 2% 23%;
+  --ring: 211 100% 50%;
+  /* Apple semantic chart colors */
+  --chart-1: 211 100% 50%;   /* Apple Blue  */
+  --chart-2: 135 58% 49%;   /* Apple Green */
+  --chart-3: 35  100% 50%;  /* Apple Orange */
+  --chart-4: 3   100% 59%;  /* Apple Red   */
+  --chart-5: 270 70%  60%;  /* Purple      */
 
   --app-font-sans: 'Inter', sans-serif;
   --app-font-serif: Georgia, serif;
@@ -141,55 +162,41 @@
 }
 
 .dark {
-  --button-outline: rgba(255,255,255, .10);
-  --badge-outline: rgba(255,255,255, .05);
-  --opaque-button-border-intensity: 9;
-  --elevate-1: rgba(255,255,255, .04);
-  --elevate-2: rgba(255,255,255, .09);
-
-  --background: 222 47% 7%;
-  --foreground: 210 40% 96%;
-  --border: 217 33% 18%;
-  --card: 222 44% 10%;
-  --card-foreground: 210 40% 96%;
-  --card-border: 217 33% 18%;
-  --sidebar: 222 47% 8%;
-  --sidebar-foreground: 210 40% 96%;
-  --sidebar-border: 217 33% 18%;
-  --sidebar-primary: 199 89% 56%;
-  --sidebar-primary-foreground: 222 47% 8%;
-  --sidebar-accent: 217 33% 16%;
-  --sidebar-accent-foreground: 210 40% 96%;
-  --sidebar-ring: 199 89% 56%;
-  --popover: 222 44% 10%;
-  --popover-foreground: 210 40% 96%;
-  --popover-border: 217 33% 18%;
-  --primary: 199 89% 56%;
-  --primary-foreground: 222 47% 8%;
-  --secondary: 217 33% 16%;
-  --secondary-foreground: 210 40% 96%;
-  --muted: 217 33% 14%;
-  --muted-foreground: 215 20% 65%;
-  --accent: 217 33% 18%;
-  --accent-foreground: 210 40% 96%;
-  --destructive: 0 84% 60%;
-  --destructive-foreground: 210 40% 96%;
-  --input: 217 33% 20%;
-  --ring: 199 89% 56%;
-  --chart-1: 199 89% 56%;
-  --chart-2: 142 71% 55%;
-  --chart-3: 38 92% 60%;
-  --chart-4: 0 84% 65%;
-  --chart-5: 270 70% 60%;
-
-  --shadow-2xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-sm: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 1px 2px -1px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 1px 2px -1px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-md: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 2px 4px -1px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-lg: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 4px 6px -1px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-xl: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 8px 10px -1px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-2xl: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00);
+  /* Mirrors :root — Apple dark palette */
+  --background: 240 3% 11%;
+  --foreground: 0 0% 95%;
+  --border: 240 3% 25%;
+  --card: 240 2% 17%;
+  --card-foreground: 0 0% 95%;
+  --card-border: 240 3% 25%;
+  --sidebar: 240 3% 11%;
+  --sidebar-foreground: 0 0% 95%;
+  --sidebar-border: 240 3% 25%;
+  --sidebar-primary: 211 100% 50%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 240 2% 20%;
+  --sidebar-accent-foreground: 0 0% 95%;
+  --sidebar-ring: 211 100% 50%;
+  --popover: 240 2% 17%;
+  --popover-foreground: 0 0% 95%;
+  --popover-border: 240 3% 25%;
+  --primary: 211 100% 50%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 240 2% 23%;
+  --secondary-foreground: 0 0% 95%;
+  --muted: 240 2% 18%;
+  --muted-foreground: 240 2% 57%;
+  --accent: 240 2% 23%;
+  --accent-foreground: 0 0% 95%;
+  --destructive: 3 100% 59%;
+  --destructive-foreground: 0 0% 100%;
+  --input: 240 2% 23%;
+  --ring: 211 100% 50%;
+  --chart-1: 211 100% 50%;
+  --chart-2: 135 58% 49%;
+  --chart-3: 35  100% 50%;
+  --chart-4: 3   100% 59%;
+  --chart-5: 270 70%  60%;
 }
 
 @layer base {
