@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Cpu,
   Sparkles,
@@ -18,6 +18,10 @@ import {
   Hammer,
   AlertCircle,
   CheckCircle2,
+  Trash2,
+  Database,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 
@@ -34,6 +38,13 @@ export interface LLMConfig {
   systemPrompt: string;
 }
 
+interface Dataset {
+  id: number;
+  name: string;
+  text: string;
+  active: boolean;
+}
+
 interface Props {
   config: LLMConfig;
   onChange: (next: LLMConfig) => void;
@@ -43,10 +54,8 @@ interface Props {
   maxParams: number;
 }
 
-// 1MB hard cap on the corpus to keep the worker from OOM-crashing the tab.
 const MAX_CORPUS_BYTES = 1_000_000;
 
-// Alternating prompts for the Bulk Text Formatter conversation simulation.
 const BULK_USER_PROMPTS = [
   "tell me a story",
   "tell me more",
@@ -54,6 +63,12 @@ const BULK_USER_PROMPTS = [
   "what happens next",
   "continue",
 ];
+
+// Truncate a Wikipedia extract to the first N sentences.
+function truncateToSentences(text: string, n: number): string {
+  const sentences = text.split(".").filter((s) => s.trim().length > 0);
+  return sentences.slice(0, n).join(".").trim() + (sentences.length > 0 ? "." : "");
+}
 
 function Card({
   children,
@@ -77,6 +92,11 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+let nextId = 2;
+function genId() {
+  return nextId++;
+}
+
 export function LLMArchitect({
   config,
   onChange,
@@ -86,8 +106,70 @@ export function LLMArchitect({
   maxParams,
 }: Props) {
   const overBudget = paramCount > maxParams;
+
+  // ── Dataset Manager state ──────────────────────────────────────────────────
+  const [datasets, setDatasets] = useState<Dataset[]>([
+    { id: 1, name: "Base Training", text: config.corpus, active: true },
+  ]);
+
+  // Ref always reflects the latest config so effects don't capture stale values.
+  const configRef = useRef(config);
+  useEffect(() => {
+    configRef.current = config;
+  });
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  });
+
+  // Track the last corpus we wrote outward so we can detect external changes
+  // (e.g. a model load from the library) and re-initialize the dataset list.
+  const lastCombinedRef = useRef(config.corpus);
+
+  // When config.corpus changes from OUTSIDE (model load), reinit datasets.
+  useEffect(() => {
+    if (config.corpus !== lastCombinedRef.current) {
+      lastCombinedRef.current = config.corpus;
+      setDatasets([
+        { id: genId(), name: "Base Training", text: config.corpus, active: true },
+      ]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.corpus]);
+
+  // Whenever datasets change, aggregate and push to parent.
+  useEffect(() => {
+    const combined = datasets
+      .filter((d) => d.active)
+      .map((d) => d.text)
+      .join("\n")
+      .slice(0, MAX_CORPUS_BYTES);
+    if (combined !== lastCombinedRef.current) {
+      lastCombinedRef.current = combined;
+      onChangeRef.current({ ...configRef.current, corpus: combined });
+    }
+  }, [datasets]);
+
+  const addDataset = (name: string, text: string) => {
+    const trimmed = text.slice(0, MAX_CORPUS_BYTES);
+    setDatasets((prev) => [
+      ...prev,
+      { id: genId(), name, text: trimmed, active: true },
+    ]);
+  };
+
+  const updateDataset = (id: number, patch: Partial<Dataset>) => {
+    setDatasets((prev) =>
+      prev.map((d) => (d.id === id ? { ...d, ...patch } : d)),
+    );
+  };
+
+  const removeDataset = (id: number) => {
+    setDatasets((prev) => prev.filter((d) => d.id !== id));
+  };
+
+  // ── Formatted .txt upload (replaces base dataset) ─────────────────────────
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploadInfo, setUploadInfo] = useState<{
     name: string;
@@ -95,35 +177,31 @@ export function LLMArchitect({
     truncated: boolean;
   } | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
+
+  const handleFormattedFile = (files: FileList | null) => {
+    setReadError(null);
+    const f = files?.[0];
+    if (!f) return;
+    if (!/\.txt$/i.test(f.name) && !f.type.startsWith("text/")) {
+      setReadError("Only .txt files are supported.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => setReadError("Could not read that file.");
+    reader.onload = () => {
+      const raw = String(reader.result ?? "");
+      const truncated = raw.length > MAX_CORPUS_BYTES;
+      const text = truncated ? raw.slice(0, MAX_CORPUS_BYTES) : raw;
+      setUploadInfo({ name: f.name, bytes: f.size, truncated });
+      addDataset(`Uploaded: ${f.name}`, text);
+    };
+    reader.readAsText(f);
+  };
+
+  // ── Fact Teacher ──────────────────────────────────────────────────────────
   const [factQ, setFactQ] = useState("");
   const [factA, setFactA] = useState("");
 
-  // --- Wikipedia Knowledge Fetcher state ---
-  const [wikiTopic, setWikiTopic] = useState("");
-  const [wikiStatus, setWikiStatus] = useState<
-    "idle" | "loading" | "success" | "error"
-  >("idle");
-  const [wikiMsg, setWikiMsg] = useState("");
-
-  // --- Bulk Text Formatter state ---
-  const [bulkFormatInfo, setBulkFormatInfo] = useState<{
-    name: string;
-    paragraphs: number;
-  } | null>(null);
-  const [bulkError, setBulkError] = useState<string | null>(null);
-
-  const appendToCorpus = (block: string) => {
-    const sep =
-      config.corpus.endsWith("\n") || config.corpus.length === 0 ? "" : "\n";
-    const next = (config.corpus + sep + block + "\n").slice(
-      0,
-      MAX_CORPUS_BYTES,
-    );
-    onChange({ ...config, corpus: next });
-  };
-
-  // Generate 4-5 hardcoded phrasings of the user's question and append them to
-  // the corpus as `User: <q>\nBot: <a>` pairs.
   const addFactVariations = () => {
     const q = factQ.trim().replace(/[?.!]+$/g, "");
     const a = factA.trim();
@@ -136,12 +214,18 @@ export function LLMArchitect({
       `Do you know ${q}?`,
     ];
     const block = variations.map((v) => `User: ${v}\nBot: ${a}`).join("\n");
-    appendToCorpus(block);
+    addDataset(`Fact: ${q}`, block);
     setFactQ("");
     setFactA("");
   };
 
-  // Wikipedia Knowledge Fetcher
+  // ── Wikipedia Knowledge Fetcher ───────────────────────────────────────────
+  const [wikiTopic, setWikiTopic] = useState("");
+  const [wikiStatus, setWikiStatus] = useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
+  const [wikiMsg, setWikiMsg] = useState("");
+
   const fetchWikipedia = async () => {
     const topic = wikiTopic.trim();
     if (!topic) return;
@@ -161,25 +245,19 @@ export function LLMArchitect({
         return;
       }
       const data = await res.json();
-      const extract: string = data.extract ?? "";
-      if (!extract) {
+      const rawExtract: string = data.extract ?? "";
+      if (!rawExtract) {
         setWikiStatus("error");
         setWikiMsg("Wikipedia returned an empty summary for this topic.");
         return;
       }
-      const block = `User: tell me about ${topic}\nBot: ${extract}`;
-      const corpusBytes = new Blob([config.corpus]).size;
-      const blockBytes = new Blob([block]).size;
-      if (corpusBytes + blockBytes > MAX_CORPUS_BYTES) {
-        setWikiStatus("error");
-        setWikiMsg(
-          "Corpus is full (1 MB limit). Remove some text before adding more.",
-        );
-        return;
-      }
-      appendToCorpus(block);
+      // Smart truncation: keep only the first 3 sentences to prevent
+      // the model from looping over a very long context window.
+      const extract = truncateToSentences(rawExtract, 3);
+      const text = `User: tell me about ${topic}\nBot: ${extract}`;
+      addDataset(`Wiki: ${topic}`, text);
       setWikiStatus("success");
-      setWikiMsg(`Added Wikipedia summary for "${topic}".`);
+      setWikiMsg(`Added Wikipedia summary for "${topic}" (3 sentences).`);
       setWikiTopic("");
     } catch {
       setWikiStatus("error");
@@ -187,7 +265,14 @@ export function LLMArchitect({
     }
   };
 
-  // Bulk Text Formatter
+  // ── Bulk Text Formatter ───────────────────────────────────────────────────
+  const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [bulkFormatInfo, setBulkFormatInfo] = useState<{
+    name: string;
+    paragraphs: number;
+  } | null>(null);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+
   const handleBulkFile = (files: FileList | null) => {
     setBulkError(null);
     setBulkFormatInfo(null);
@@ -201,12 +286,9 @@ export function LLMArchitect({
     reader.onerror = () => setBulkError("Could not read that file.");
     reader.onload = () => {
       const raw = String(reader.result ?? "");
-      // Split by double newline first, fall back to single newline.
       const rawParagraphs = raw.split(/\n\n+/).flatMap((chunk) => {
         const trimmed = chunk.trim();
-        if (!trimmed) return [];
-        // If the chunk itself has multiple lines, keep as-is (it's a paragraph).
-        return [trimmed];
+        return trimmed ? [trimmed] : [];
       });
       const paragraphs = rawParagraphs.filter((p) => p.length > 0);
       if (paragraphs.length === 0) {
@@ -219,53 +301,24 @@ export function LLMArchitect({
             `User: ${BULK_USER_PROMPTS[i % BULK_USER_PROMPTS.length]}\nBot: ${p}`,
         )
         .join("\n");
-      const corpusBytes = new Blob([config.corpus]).size;
-      const blockBytes = new Blob([block]).size;
-      const combined = config.corpus + (config.corpus.endsWith("\n") || config.corpus.length === 0 ? "" : "\n") + block + "\n";
-      const truncated = combined.length > MAX_CORPUS_BYTES;
-      onChange({ ...config, corpus: combined.slice(0, MAX_CORPUS_BYTES) });
-      setBulkFormatInfo({
-        name: f.name,
-        paragraphs: paragraphs.length,
-      });
-      if (truncated) {
-        setBulkError(
-          `Corpus hit the 1 MB limit — some paragraphs were truncated.`,
-        );
-      }
-      // Reset the file input so the same file can be re-selected.
+      addDataset(`Bulk: ${f.name}`, block);
+      setBulkFormatInfo({ name: f.name, paragraphs: paragraphs.length });
       if (bulkFileInputRef.current) bulkFileInputRef.current.value = "";
-      void corpusBytes; void blockBytes;
     };
     reader.readAsText(f);
   };
 
+  // ── Derived values ────────────────────────────────────────────────────────
   const isWord = config.tokenization === "word";
   const tokenLabel = isWord ? "tokens" : "chars";
   const corpusBytes = new Blob([config.corpus]).size;
-
-  const handleFiles = (files: FileList | null) => {
-    setReadError(null);
-    const f = files?.[0];
-    if (!f) return;
-    if (!/\.txt$/i.test(f.name) && !f.type.startsWith("text/")) {
-      setReadError("Only .txt files are supported.");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onerror = () => setReadError("Could not read that file.");
-    reader.onload = () => {
-      const raw = String(reader.result ?? "");
-      const truncated = raw.length > MAX_CORPUS_BYTES;
-      const text = truncated ? raw.slice(0, MAX_CORPUS_BYTES) : raw;
-      setUploadInfo({ name: f.name, bytes: f.size, truncated });
-      onChange({ ...config, corpus: text });
-    };
-    reader.readAsText(f);
-  };
+  const totalDatasetBytes = datasets
+    .filter((d) => d.active)
+    .reduce((s, d) => s + new Blob([d.text]).size, 0);
 
   return (
     <div className="space-y-4">
+      {/* ── Architecture Card ─────────────────────────────────────────────── */}
       <Card className="p-5 space-y-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -283,7 +336,6 @@ export function LLMArchitect({
           </span>
         </div>
 
-        {/* Tokenization toggle */}
         <div className="space-y-2">
           <span className="text-xs text-slate-400">Tokenization</span>
           <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-950/60 border border-slate-700 p-1">
@@ -373,9 +425,7 @@ export function LLMArchitect({
 
         <div className="space-y-2">
           <div className="flex justify-between">
-            <span className="text-xs text-slate-400">
-              Sampling Temperature
-            </span>
+            <span className="text-xs text-slate-400">Sampling Temperature</span>
             <span className="text-xs tabular-nums text-slate-200">
               {config.temperature.toFixed(2)}
             </span>
@@ -393,7 +443,6 @@ export function LLMArchitect({
           </p>
         </div>
 
-        {/* Top-K sampling */}
         <div className="space-y-2">
           <div className="flex justify-between items-center">
             <span className="text-xs text-slate-400 inline-flex items-center gap-1.5">
@@ -413,12 +462,11 @@ export function LLMArchitect({
             className="py-2"
           />
           <p className="text-[10px] text-slate-500">
-            Only the {config.topK} most-likely next tokens are considered when
-            sampling. Lower = safer & more on-topic.
+            Only the {config.topK} most-likely next tokens are considered.
+            Lower = safer & more on-topic.
           </p>
         </div>
 
-        {/* System prompt */}
         <div className="space-y-2">
           <span className="text-xs text-slate-400 inline-flex items-center gap-1.5">
             <MessageSquare className="size-3 text-sky-300" />
@@ -454,6 +502,7 @@ export function LLMArchitect({
         </div>
       </Card>
 
+      {/* ── Training Corpus Card ──────────────────────────────────────────── */}
       <Card className="p-5 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -467,7 +516,6 @@ export function LLMArchitect({
           </span>
         </div>
 
-        {/* Pro tip */}
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 flex gap-2.5">
           <Lightbulb className="size-4 text-amber-300 shrink-0 mt-0.5" />
           <div className="text-[11px] text-amber-100/90 leading-relaxed">
@@ -480,28 +528,16 @@ export function LLMArchitect({
           </div>
         </div>
 
-        {/* Drag and drop */}
+        {/* Formatted .txt drop zone */}
         <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragOver(false);
-            handleFiles(e.dataTransfer.files);
-          }}
+          onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFormattedFile(e.dataTransfer.files); }}
           onClick={() => fileInputRef.current?.click()}
           role="button"
           tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              fileInputRef.current?.click();
-            }
-          }}
-          className={`rounded-xl border-2 border-dashed p-4 text-center cursor-pointer transition select-none min-h-[110px] flex flex-col items-center justify-center gap-1.5 ${
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); } }}
+          className={`rounded-xl border-2 border-dashed p-4 text-center cursor-pointer transition select-none min-h-[100px] flex flex-col items-center justify-center gap-1.5 ${
             dragOver
               ? "border-sky-400 bg-sky-500/10"
               : "border-slate-700 hover:border-slate-500 hover:bg-slate-900/60"
@@ -509,18 +545,17 @@ export function LLMArchitect({
         >
           <Upload className="size-5 text-sky-300" />
           <div className="text-xs font-semibold text-slate-200">
-            Drop a <code className="text-sky-300">.txt</code> file here
+            Drop a formatted <code className="text-sky-300">.txt</code> corpus here
           </div>
           <div className="text-[10px] text-slate-500">
-            or tap to browse — max {formatBytes(MAX_CORPUS_BYTES)}, larger files
-            will be truncated.
+            Added as a new dataset · max {formatBytes(MAX_CORPUS_BYTES)}
           </div>
           <input
             ref={fileInputRef}
             type="file"
             accept=".txt,text/plain"
             className="hidden"
-            onChange={(e) => handleFiles(e.target.files)}
+            onChange={(e) => handleFormattedFile(e.target.files)}
           />
         </div>
 
@@ -528,16 +563,11 @@ export function LLMArchitect({
           <div className="flex items-start gap-2 rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2">
             <FileText className="size-3.5 text-emerald-300 mt-0.5 shrink-0" />
             <div className="min-w-0 flex-1">
-              <div className="text-[11px] text-slate-200 truncate">
-                {uploadInfo.name}
-              </div>
+              <div className="text-[11px] text-slate-200 truncate">{uploadInfo.name}</div>
               <div className="text-[10px] text-slate-500">
                 {formatBytes(uploadInfo.bytes)}
                 {uploadInfo.truncated && (
-                  <span className="text-amber-300">
-                    {" "}
-                    · truncated to {formatBytes(MAX_CORPUS_BYTES)}
-                  </span>
+                  <span className="text-amber-300"> · truncated to {formatBytes(MAX_CORPUS_BYTES)}</span>
                 )}
               </div>
             </div>
@@ -554,13 +584,10 @@ export function LLMArchitect({
         <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2.5">
           <div className="flex items-center gap-2">
             <GraduationCap className="size-4 text-emerald-300" />
-            <span className="text-xs font-semibold text-emerald-100">
-              Fact Teacher
-            </span>
+            <span className="text-xs font-semibold text-emerald-100">Fact Teacher</span>
           </div>
           <p className="text-[10px] text-emerald-100/70 leading-relaxed">
-            Teach the bot one fact in 5 different phrasings — pairs are
-            appended to the corpus as <code className="font-mono">User:/Bot:</code> lines.
+            Teach the bot one fact in 5 phrasings — added as a new dataset.
           </p>
           <input
             type="text"
@@ -574,6 +601,7 @@ export function LLMArchitect({
             value={factA}
             onChange={(e) => setFactA(e.target.value)}
             placeholder="Answer (e.g. Paris)"
+            onKeyDown={(e) => { if (e.key === "Enter") addFactVariations(); }}
             className="w-full min-h-[36px] rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
           />
           <button
@@ -587,43 +615,37 @@ export function LLMArchitect({
           </button>
         </div>
 
-        {/* ── Data Forge ── */}
+        {/* Data Forge */}
         <div className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-3 space-y-4">
           <div className="flex items-center gap-2">
             <Hammer className="size-4 text-violet-300" />
-            <span className="text-xs font-semibold text-violet-100">
-              Data Forge
-            </span>
+            <span className="text-xs font-semibold text-violet-100">Data Forge</span>
           </div>
           <p className="text-[10px] text-violet-100/70 leading-relaxed">
-            Automated corpus-generation tools. Results are appended to the
-            corpus below and immediately ready to train on.
+            Each tool creates a new dataset entry in the library below.
           </p>
 
-          {/* Wikipedia Knowledge Fetcher */}
+          {/* Wikipedia */}
           <div className="space-y-2">
             <div className="flex items-center gap-1.5">
               <Globe className="size-3.5 text-sky-300" />
               <span className="text-[11px] font-semibold text-slate-200">
                 Wikipedia Knowledge Fetcher
               </span>
+              <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/25">
+                3-sentence summary
+              </span>
             </div>
             <p className="text-[10px] text-slate-500">
-              Fetches a Wikipedia summary and formats it as a{" "}
-              <code className="font-mono">User:/Bot:</code> Q&A pair.
+              Fetches a concise Wikipedia summary and creates a{" "}
+              <code className="font-mono">User:/Bot:</code> dataset entry.
             </p>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={wikiTopic}
-                onChange={(e) => {
-                  setWikiTopic(e.target.value);
-                  setWikiStatus("idle");
-                  setWikiMsg("");
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") fetchWikipedia();
-                }}
+                onChange={(e) => { setWikiTopic(e.target.value); setWikiStatus("idle"); setWikiMsg(""); }}
+                onKeyDown={(e) => { if (e.key === "Enter") fetchWikipedia(); }}
                 placeholder="Topic (e.g. Quantum Mechanics)"
                 className="flex-1 min-h-[36px] rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
               />
@@ -633,15 +655,10 @@ export function LLMArchitect({
                 disabled={!wikiTopic.trim() || wikiStatus === "loading"}
                 className="min-h-[36px] px-3 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-sky-100 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
               >
-                {wikiStatus === "loading" ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Globe className="size-3.5" />
-                )}
+                {wikiStatus === "loading" ? <Loader2 className="size-3.5 animate-spin" /> : <Globe className="size-3.5" />}
                 {wikiStatus === "loading" ? "Fetching…" : "Fetch & Learn"}
               </button>
             </div>
-
             {wikiStatus === "success" && (
               <div className="flex items-start gap-1.5 text-[10px] text-emerald-300">
                 <CheckCircle2 className="size-3.5 shrink-0 mt-0.5" />
@@ -656,7 +673,6 @@ export function LLMArchitect({
             )}
           </div>
 
-          {/* Divider */}
           <div className="border-t border-violet-500/20" />
 
           {/* Bulk Text Formatter */}
@@ -669,8 +685,8 @@ export function LLMArchitect({
             </div>
             <p className="text-[10px] text-slate-500">
               Upload a raw <code className="font-mono">.txt</code> file.
-              Paragraphs are split and wrapped in alternating{" "}
-              <code className="font-mono">User:/Bot:</code> turns automatically.
+              Paragraphs are wrapped in alternating{" "}
+              <code className="font-mono">User:/Bot:</code> turns and saved as a new dataset.
             </p>
             <button
               type="button"
@@ -687,15 +703,13 @@ export function LLMArchitect({
               className="hidden"
               onChange={(e) => handleBulkFile(e.target.files)}
             />
-
             {bulkFormatInfo && (
               <div className="flex items-start gap-1.5 text-[10px] text-emerald-300">
                 <CheckCircle2 className="size-3.5 shrink-0 mt-0.5" />
                 <span>
                   <span className="font-semibold">{bulkFormatInfo.name}</span>{" "}
                   — {bulkFormatInfo.paragraphs} paragraph
-                  {bulkFormatInfo.paragraphs !== 1 ? "s" : ""} formatted and
-                  appended.
+                  {bulkFormatInfo.paragraphs !== 1 ? "s" : ""} formatted and added as a dataset.
                 </span>
               </div>
             )}
@@ -708,27 +722,91 @@ export function LLMArchitect({
           </div>
         </div>
 
-        {/* Manual fallback */}
-        <div className="space-y-1.5">
-          <label className="text-[10px] uppercase tracking-wider text-slate-500">
-            Paste / edit text
-          </label>
-          <textarea
-            value={config.corpus}
-            onChange={(e) => {
-              const v = e.target.value;
-              const truncated =
-                v.length > MAX_CORPUS_BYTES ? v.slice(0, MAX_CORPUS_BYTES) : v;
-              onChange({ ...config, corpus: truncated });
-            }}
-            rows={6}
-            className="w-full min-h-[140px] rounded-xl border border-slate-700 bg-slate-900/60 p-3 text-sm font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40 resize-none"
-            placeholder={
-              isWord
-                ? "User: hello\nBot: hi how can i help"
-                : "hello world. hello friend…"
-            }
-          />
+        {/* ── Dataset Manager ───────────────────────────────────────────────── */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Database className="size-3.5 text-sky-300" />
+              <span className="text-xs font-semibold text-slate-200">
+                Corpus Library
+              </span>
+              <span className="text-[10px] text-slate-500 tabular-nums">
+                ({datasets.filter((d) => d.active).length}/{datasets.length} active · {formatBytes(totalDatasetBytes)})
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => addDataset("New Dataset", "")}
+              className="min-h-[28px] px-2.5 rounded-lg bg-slate-700/60 hover:bg-slate-700 border border-slate-600 text-slate-300 text-[11px] font-semibold inline-flex items-center gap-1 transition"
+            >
+              <Plus className="size-3" />
+              Add
+            </button>
+          </div>
+
+          <div className="space-y-2">
+            {datasets.map((ds) => (
+              <div
+                key={ds.id}
+                className={`rounded-xl border transition ${
+                  ds.active
+                    ? "border-slate-600 bg-slate-900/60"
+                    : "border-slate-700/50 bg-slate-900/30 opacity-60"
+                }`}
+              >
+                {/* Dataset header */}
+                <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-700/50">
+                  <div
+                    className={`size-2 rounded-full shrink-0 ${
+                      ds.active ? "bg-emerald-400" : "bg-slate-600"
+                    }`}
+                  />
+                  <input
+                    type="text"
+                    value={ds.name}
+                    onChange={(e) => updateDataset(ds.id, { name: e.target.value })}
+                    className="flex-1 min-w-0 bg-transparent text-[11px] font-semibold text-slate-200 placeholder:text-slate-500 focus:outline-none"
+                    placeholder="Dataset name"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => updateDataset(ds.id, { active: !ds.active })}
+                    title={ds.active ? "Deactivate" : "Activate"}
+                    className={`shrink-0 size-6 rounded-md flex items-center justify-center transition ${
+                      ds.active
+                        ? "text-emerald-300 hover:bg-emerald-500/20"
+                        : "text-slate-500 hover:bg-slate-700"
+                    }`}
+                  >
+                    {ds.active ? (
+                      <Eye className="size-3.5" />
+                    ) : (
+                      <EyeOff className="size-3.5" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeDataset(ds.id)}
+                    title="Delete dataset"
+                    className="shrink-0 size-6 rounded-md flex items-center justify-center text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
+                {/* Dataset text */}
+                <textarea
+                  value={ds.text}
+                  onChange={(e) => {
+                    const v = e.target.value.slice(0, MAX_CORPUS_BYTES);
+                    updateDataset(ds.id, { text: v });
+                  }}
+                  rows={4}
+                  placeholder="Paste or type corpus text here…"
+                  className="w-full rounded-b-xl bg-transparent px-3 py-2 text-[11px] font-mono text-slate-300 placeholder:text-slate-600 focus:outline-none resize-none"
+                />
+              </div>
+            ))}
+          </div>
         </div>
 
         <button
