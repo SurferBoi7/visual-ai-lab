@@ -8,6 +8,7 @@ import {
   joinTokens,
   tokenize,
   sampleFromProbs,
+  PAD_TOKEN,
   // Re-exported only because makeSample still uses generateTokens for the
   // training-tick "live dream" preview where stop-sequencing isn't desired.
   type Tokenization,
@@ -264,9 +265,14 @@ self.onmessage = (e: MessageEvent) => {
       const length = msg.length ?? 300;
       const temp = msg.temperature ?? temperature;
       const ctxSize = net.config.contextSize;
-      const padId = stoi[" "] ?? 0;
+      // Prefer the dedicated <PAD> sentinel; fall back to space for legacy
+      // models that pre-date the special token, then to vocab index 0.
+      const padId = stoi[PAD_TOKEN] ?? stoi[" "] ?? 0;
 
       // Build the rolling context window from the (possibly empty) seed.
+      // If the prompt is shorter than the context window, prepend <PAD>
+      // tokens until it fills the window exactly. This avoids the model
+      // hallucinating from a leftover real-token prefix.
       const seedIds = seedTokens.map((t) =>
         stoi[t] !== undefined ? stoi[t] : padId,
       );
@@ -287,8 +293,13 @@ self.onmessage = (e: MessageEvent) => {
         // and renormalize, so the model can't sample low-probability junk.
         const filtered = applyTopK(probs, topK);
         const next = sampleFromProbs(filtered, temp);
-        generated.push(vocab[next]);
+        const tok = vocab[next];
+        // Always advance the rolling context with the sampled token so the
+        // model's internal state stays coherent, but suppress <PAD> from the
+        // visible chat output — it's an internal sentinel, not real text.
         ctx = ctx.slice(1).concat(next);
+        if (tok === PAD_TOKEN) continue;
+        generated.push(tok);
 
         text = joinTokens(generated, tokenization);
         const cut = findStopCut(text);

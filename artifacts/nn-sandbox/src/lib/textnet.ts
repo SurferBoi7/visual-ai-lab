@@ -156,12 +156,23 @@ export function joinTokens(tokens: string[], mode: Tokenization): string {
   return out;
 }
 
+// Special padding token. Reserved at index 0 of every vocabulary so the model
+// has a stable, dedicated symbol for "no token here / start of sequence". This
+// fixes the "short-prompt hallucination" bug where short user prompts were
+// being padded with a regular space character — which the model had learned
+// real semantic meaning for — instead of an out-of-band sentinel.
+export const PAD_TOKEN = "<PAD>";
+
 export function buildVocab(tokens: string[]): {
   chars: string[];
   stoi: Record<string, number>;
 } {
   const set = new Set(tokens);
-  const chars = Array.from(set).sort();
+  // The corpus should never contribute the literal "<PAD>" string itself —
+  // both tokenizers split "<", "P", "A", "D", ">" into separate tokens — but
+  // we guard defensively so the special token always lives at exactly index 0.
+  set.delete(PAD_TOKEN);
+  const chars = [PAD_TOKEN, ...Array.from(set).sort()];
   const stoi: Record<string, number> = {};
   chars.forEach((c, i) => (stoi[c] = i));
   return { chars, stoi };
@@ -174,6 +185,40 @@ export function makeWindows(
 ): { inputs: number[][]; targets: number[] } {
   const inputs: number[][] = [];
   const targets: number[] = [];
+  // Padding id — falls back to 0 (where buildVocab now always places <PAD>) if
+  // an older vocab somehow lacks the special token.
+  const padId = stoi[PAD_TOKEN] ?? 0;
+
+  // Padded prefix windows. For the first `contextSize` positions in the corpus
+  // there are not enough preceding tokens to fill the context window, so we
+  // pad the missing slots on the LEFT with <PAD>. This teaches the model that
+  // <PAD> means "start of sequence / empty space" and prevents the rest of the
+  // vocabulary from soaking up that role at inference time.
+  const prefixCount = Math.min(contextSize, tokens.length);
+  for (let i = 0; i < prefixCount; i++) {
+    const tgt = stoi[tokens[i]];
+    if (tgt === undefined) continue;
+    const ctx: number[] = new Array(contextSize);
+    let ok = true;
+    for (let k = 0; k < contextSize; k++) {
+      const srcIdx = i - contextSize + k;
+      if (srcIdx < 0) {
+        ctx[k] = padId;
+      } else {
+        const id = stoi[tokens[srcIdx]];
+        if (id === undefined) {
+          ok = false;
+          break;
+        }
+        ctx[k] = id;
+      }
+    }
+    if (!ok) continue;
+    inputs.push(ctx);
+    targets.push(tgt);
+  }
+
+  // Standard rolling windows over the rest of the corpus.
   for (let i = 0; i + contextSize < tokens.length; i++) {
     const ctx: number[] = [];
     let ok = true;
@@ -236,7 +281,9 @@ export function generateTokens(
   temperature: number,
 ): string[] {
   const ctxSize = net.config.contextSize;
-  const padId = stoi[" "] ?? 0;
+  // Prefer the dedicated <PAD> sentinel; fall back to space (legacy models)
+  // and finally vocab index 0 so we never crash on a malformed vocab.
+  const padId = stoi[PAD_TOKEN] ?? stoi[" "] ?? 0;
   const seedIds = seedTokens.map((t) =>
     stoi[t] !== undefined ? stoi[t] : padId,
   );
@@ -244,13 +291,18 @@ export function generateTokens(
   if (seedIds.length >= ctxSize) {
     ctx = seedIds.slice(-ctxSize);
   } else {
+    // Left-pad short seeds with <PAD> so the prompt always sits flush against
+    // the end of the context window.
     ctx = new Array(ctxSize - seedIds.length).fill(padId).concat(seedIds);
   }
   const out: string[] = [];
   for (let i = 0; i < length; i++) {
     const { probs } = net.forward(ctx);
     const next = sampleFromProbs(probs, temperature);
-    out.push(itos[next]);
+    const tok = itos[next];
+    // Filter <PAD> out of the visible output but still let it flow through
+    // the rolling context so the model's internal state stays coherent.
+    if (tok !== PAD_TOKEN) out.push(tok);
     ctx = ctx.slice(1).concat(next);
   }
   return out;
