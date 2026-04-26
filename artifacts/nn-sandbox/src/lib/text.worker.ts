@@ -28,10 +28,30 @@ const STOP_SEQUENCES = ["user", " user"];
 // text that flows into the model — both the training corpus and live chat
 // prompts — so the vocabulary stays small and consistent (e.g. "Sky", "sky"
 // and "sky's" all collapse to the single token "sky").
+//
+// IMPORTANT: the literal "<PAD>" sentinel must survive normalization intact.
+// A naive `.toLowerCase().replace(/[^\p{L}\p{N}\s]+/u, " ")` would strip the
+// angle brackets and lowercase the body, leaving the bare word "pad" — which
+// the vocab builder would then learn as a regular content token, breaking
+// both the inference output filter and the document-separator semantics.
+//
+// To prevent that, split the input on PAD_TOKEN first, normalize only the
+// real-text chunks, and stitch them back together with PAD_TOKEN as the glue.
 export function normalizeText(text: string): string {
+  const cleanChunk = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  if (!text.includes(PAD_TOKEN)) return cleanChunk(text);
+  // Pad each PAD_TOKEN with surrounding spaces so it remains a stand-alone
+  // token after the downstream tokenizer runs (otherwise "...end<PAD>start..."
+  // collapses into "end<PAD>start" with no whitespace boundary in word mode).
   return text
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .split(PAD_TOKEN)
+    .map(cleanChunk)
+    .join(` ${PAD_TOKEN} `)
     .replace(/\s+/g, " ")
     .trim();
 }
