@@ -10,6 +10,16 @@ export interface MLPWeights {
   learningRate: number;
 }
 
+// Mirrors the Dataset shape in LLMArchitect.tsx. Stored alongside the
+// flattened corpus so a save → load round trip can restore the user's
+// individual datasets in the Dataset Manager UI instead of collapsing
+// everything into a single "Base Training" file.
+export interface SavedDataset {
+  name: string;
+  text: string;
+  active: boolean;
+}
+
 export interface CharLMWeights {
   vocab: string[];
   tokenization?: "char" | "word";
@@ -28,6 +38,10 @@ export interface CharLMWeights {
   // Original corpus + temperature so the model can be used immediately on load.
   corpus?: string;
   temperature?: number;
+  // Optional snapshot of the Dataset Manager state at save time. Older saves
+  // pre-date this field, so it must remain optional and load paths must
+  // tolerate its absence (and never derive datasets from `corpus`).
+  datasets?: SavedDataset[];
 }
 
 export interface SavedModel {

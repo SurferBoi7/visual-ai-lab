@@ -34,6 +34,7 @@ import { ModeToggle, type AppMode } from "@/components/ModeToggle";
 import {
   LLMArchitect,
   type LLMConfig,
+  type Dataset,
 } from "@/components/llm/LLMArchitect";
 import { ChatView, type ChatMessage } from "@/components/llm/ChatView";
 import { LLMStats } from "@/components/llm/LLMStats";
@@ -196,6 +197,15 @@ export default function App() {
   const [snap, setSnap] = useState<SnapshotMsg | null>(null);
 
   // ---- LLM state ----
+  // Datasets are the single source of truth for the user's individual files.
+  // The flattened `corpus` string in `llmConfig` is derived from datasets by
+  // <LLMArchitect/> and pushed back up via onChange — never the other way
+  // around. Lifted here (rather than inside the architect) so model loads can
+  // selectively restore datasets when the saved JSON contains them, without
+  // ever overwriting them from a flattened corpus blob.
+  const [datasets, setDatasets] = useState<Dataset[]>([
+    { id: 1, name: "Base Training", text: DEFAULT_CORPUS, active: true },
+  ]);
   const [llmConfig, setLLMConfig] = useState<LLMConfig>({
     corpus: DEFAULT_CORPUS,
     contextSize: 3,
@@ -528,6 +538,14 @@ export default function App() {
           parsed.corpus = llmConfig.corpus;
           parsed.temperature = llmConfig.temperature;
           parsed.tokenization = llmConfig.tokenization;
+          // Snapshot the user's individual datasets (without their UI-only
+          // numeric ids) so the Dataset Manager can be restored on load
+          // instead of collapsing into a single "Base Training" file.
+          parsed.datasets = datasets.map(({ name, text, active }) => ({
+            name,
+            text,
+            active,
+          }));
           resolve(parsed as CharLMWeights & { corpus: string });
         } catch {
           resolve(null);
@@ -535,7 +553,12 @@ export default function App() {
       });
       worker.postMessage({ type: "exportModel", id });
     });
-  }, [llmConfig.corpus, llmConfig.temperature, llmConfig.tokenization]);
+  }, [
+    llmConfig.corpus,
+    llmConfig.temperature,
+    llmConfig.tokenization,
+    datasets,
+  ]);
 
   const downloadJSON = (filename: string, payload: unknown) => {
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -687,6 +710,32 @@ export default function App() {
         temperature: typeof w.temperature === "number" ? w.temperature : 0.6,
         tokenization: restoredTok,
       }));
+      // Restore datasets ONLY when the saved file explicitly carries them.
+      // We never derive datasets from the flattened corpus string — doing so
+      // would collapse the user's individual files into one giant blob (and
+      // contaminate it with the <PAD>-wall document separators). Older saves
+      // pre-date this field and simply leave the user's existing datasets in
+      // place, which is the documented graceful fallback.
+      if (Array.isArray(w.datasets) && w.datasets.length > 0) {
+        const baseId = Date.now();
+        setDatasets(
+          w.datasets
+            .filter(
+              (d): d is { name: string; text: string; active: boolean } =>
+                !!d &&
+                typeof d === "object" &&
+                typeof (d as { name?: unknown }).name === "string" &&
+                typeof (d as { text?: unknown }).text === "string" &&
+                typeof (d as { active?: unknown }).active === "boolean",
+            )
+            .map((d, i) => ({
+              id: baseId + i,
+              name: d.name,
+              text: d.text,
+              active: d.active,
+            })),
+        );
+      }
       textWorkerRef.current?.postMessage({
         type: "loadWeights",
         payload: {
@@ -1008,6 +1057,8 @@ export default function App() {
           vocabSizeFor(llmConfig.corpus, llmConfig.tokenization),
         )}
         maxParams={MAX_PARAMS_LLM}
+        datasets={datasets}
+        onDatasetsChange={setDatasets}
       />
       <Card className="p-5 space-y-3">
         <div className="flex items-center gap-2">

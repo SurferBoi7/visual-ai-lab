@@ -47,7 +47,10 @@ export interface LLMConfig {
   systemPrompt: string;
 }
 
-interface Dataset {
+// A single user-managed dataset row in the Dataset Manager. The `id` is a
+// UI-only handle (used as React key and for update/remove targeting); the
+// persisted shape in storage.ts intentionally omits it.
+export interface Dataset {
   id: number;
   name: string;
   text: string;
@@ -61,9 +64,16 @@ interface Props {
   paramCount: number;
   vocabSize: number;
   maxParams: number;
+  // Controlled dataset state. `datasets` is the SINGLE SOURCE OF TRUTH for the
+  // user's individual files; the flattened `config.corpus` string is derived
+  // FROM datasets (never the other way around) and pushed to the parent via
+  // `onChange`. Lifted to App.tsx so model loads can selectively restore the
+  // datasets array without ever overwriting it from a flattened corpus blob.
+  datasets: Dataset[];
+  onDatasetsChange: (next: Dataset[]) => void;
 }
 
-const MAX_CORPUS_BYTES = 1_000_000;
+export const MAX_CORPUS_BYTES = 1_000_000;
 
 const BULK_USER_PROMPTS = [
   "tell me a story",
@@ -113,13 +123,10 @@ export function LLMArchitect({
   paramCount,
   vocabSize,
   maxParams,
+  datasets,
+  onDatasetsChange,
 }: Props) {
   const overBudget = paramCount > maxParams;
-
-  // ── Dataset Manager state ──────────────────────────────────────────────────
-  const [datasets, setDatasets] = useState<Dataset[]>([
-    { id: 1, name: "Base Training", text: config.corpus, active: true },
-  ]);
 
   // Ref always reflects the latest config so effects don't capture stale values.
   const configRef = useRef(config);
@@ -131,20 +138,11 @@ export function LLMArchitect({
     onChangeRef.current = onChange;
   });
 
-  // Track the last corpus we wrote outward so we can detect external changes
-  // (e.g. a model load from the library) and re-initialize the dataset list.
-  const lastCombinedRef = useRef(config.corpus);
-
-  // When config.corpus changes from OUTSIDE (model load), reinit datasets.
-  useEffect(() => {
-    if (config.corpus !== lastCombinedRef.current) {
-      lastCombinedRef.current = config.corpus;
-      setDatasets([
-        { id: genId(), name: "Base Training", text: config.corpus, active: true },
-      ]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.corpus]);
+  // Track the last combined corpus we pushed outward so we can avoid bouncing
+  // an unchanged value back into onChange every render. Note: this ref only
+  // serves as a write-side dedupe — datasets remain the source of truth and
+  // are NEVER reconstructed from `config.corpus`.
+  const lastCombinedRef = useRef<string | null>(null);
 
   // Whenever datasets change, aggregate and push to parent. We physically
   // inject a wall of <PAD> tokens BETWEEN every active dataset and as a
@@ -167,20 +165,20 @@ export function LLMArchitect({
 
   const addDataset = (name: string, text: string) => {
     const trimmed = text.slice(0, MAX_CORPUS_BYTES);
-    setDatasets((prev) => [
-      ...prev,
+    onDatasetsChange([
+      ...datasets,
       { id: genId(), name, text: trimmed, active: true },
     ]);
   };
 
   const updateDataset = (id: number, patch: Partial<Dataset>) => {
-    setDatasets((prev) =>
-      prev.map((d) => (d.id === id ? { ...d, ...patch } : d)),
+    onDatasetsChange(
+      datasets.map((d) => (d.id === id ? { ...d, ...patch } : d)),
     );
   };
 
   const removeDataset = (id: number) => {
-    setDatasets((prev) => prev.filter((d) => d.id !== id));
+    onDatasetsChange(datasets.filter((d) => d.id !== id));
   };
 
   // ── Formatted .txt upload (replaces base dataset) ─────────────────────────
