@@ -24,8 +24,17 @@ import {
   EyeOff,
 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
+import { PAD_TOKEN } from "@/lib/textnet";
 
 export type Tokenization = "char" | "word";
+
+// Wall of <PAD> tokens injected between datasets so the model treats each one
+// as an independent document. Every <PAD> here is recognised by the tokenizer
+// as the single special padding id (not split character-by-character), so a
+// run of 20 of them gives the rolling context window enough room to fully
+// flush the previous topic before the next dataset starts. Newlines on either
+// side keep the separator visually obvious in the corpus textarea too.
+const DATASET_SEPARATOR = `\n${Array(20).fill(PAD_TOKEN).join(" ")}\n`;
 
 export interface LLMConfig {
   corpus: string;
@@ -137,13 +146,19 @@ export function LLMArchitect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.corpus]);
 
-  // Whenever datasets change, aggregate and push to parent.
+  // Whenever datasets change, aggregate and push to parent. We physically
+  // inject a wall of <PAD> tokens BETWEEN every active dataset and as a
+  // PREFIX to the very first one, so each dataset reads as an independent
+  // document instead of one giant continuous string. This stops cross-document
+  // contamination — e.g. the model learning that "Bot:" from dataset A flows
+  // straight into the first sentence of dataset B.
   useEffect(() => {
-    const combined = datasets
-      .filter((d) => d.active)
-      .map((d) => d.text)
-      .join("\n")
-      .slice(0, MAX_CORPUS_BYTES);
+    const active = datasets.filter((d) => d.active).map((d) => d.text);
+    const combined = (
+      active.length === 0
+        ? ""
+        : DATASET_SEPARATOR + active.join(DATASET_SEPARATOR)
+    ).slice(0, MAX_CORPUS_BYTES);
     if (combined !== lastCombinedRef.current) {
       lastCombinedRef.current = combined;
       onChangeRef.current({ ...configRef.current, corpus: combined });

@@ -134,10 +134,39 @@ export type Tokenization = "char" | "word";
 // characters as tokens and emits each non-word character (punctuation) as its
 // own token, which keeps the vocabulary compact while still letting the model
 // learn punctuation.
+//
+// Both modes recognise the literal substring "<PAD>" as the single PAD_TOKEN
+// special token rather than splitting it into characters/parts. This lets
+// upstream code physically inject document separators into the corpus that
+// flow through to the model as the special padding id (see
+// LLMArchitect.tsx's dataset combiner).
 export function tokenize(text: string, mode: Tokenization): string[] {
-  if (mode === "char") return text.split("");
-  const matches = text.match(/[A-Za-z0-9_']+|[^\sA-Za-z0-9_']/g);
-  return matches ?? [];
+  const out: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith(PAD_TOKEN, i)) {
+      out.push(PAD_TOKEN);
+      i += PAD_TOKEN.length;
+      continue;
+    }
+    if (mode === "char") {
+      out.push(text[i]);
+      i++;
+      continue;
+    }
+    // Word mode: try to greedily match a word run or a single punctuation
+    // character; otherwise (whitespace) advance one character without
+    // emitting a token.
+    const remain = text.slice(i);
+    const m = remain.match(/^([A-Za-z0-9_']+|[^\sA-Za-z0-9_'])/);
+    if (m) {
+      out.push(m[0]);
+      i += m[0].length;
+    } else {
+      i++;
+    }
+  }
+  return out;
 }
 
 // Join a sequence of tokens back into a display string. Word-mode inserts a

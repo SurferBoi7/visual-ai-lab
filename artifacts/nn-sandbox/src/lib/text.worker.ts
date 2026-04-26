@@ -60,6 +60,9 @@ interface InitOpts {
 // it can only have been produced by the word-level tokenizer.
 function inferTokenizationFromVocab(vocabArr: string[]): Tokenization {
   for (const t of vocabArr) {
+    // Skip the special <PAD> sentinel — every vocab now contains it
+    // regardless of tokenization mode, so it can't be used as a signal.
+    if (t === PAD_TOKEN) continue;
     if (typeof t === "string" && t.length > 1) return "word";
   }
   return "char";
