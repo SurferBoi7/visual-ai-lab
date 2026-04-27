@@ -612,9 +612,58 @@ export default function App() {
             return;
           }
 
-          // Feed the corrected sentence to the worker so the model sees
-          // the typo-fixed version it actually knows how to respond to.
-          normalizedInput = correctedWords.join(" ");
+          // ── Intent router (keyword-overlap) ──────────────────────────
+          // Tiny LMs only reliably reproduce prompts they were literally
+          // trained on. A user typing the bare keyword "liverpool" never
+          // appears verbatim in the corpus, even though the corpus has a
+          // "User: tell me about liverpool" line whose answer is exactly
+          // what the user wants. So before handing the seed to the worker
+          // we try to map the user's keywords onto a canonical training
+          // prompt by simple set-intersection:
+          //
+          //   1. Pull every `User: …` line out of the corpus and strip the
+          //      speaker tag to recover the raw training prompts.
+          //   2. For each, normalize and drop stopwords to get the prompt's
+          //      "core keywords" (the same shape as `meaningful`).
+          //   3. Score each prompt by the size of its core-keyword set
+          //      intersected with the user's meaningful keyword set.
+          //   4. The highest-scoring prompt with a non-zero overlap wins
+          //      and silently replaces the user's input. Ties resolve to
+          //      whichever prompt appears first in the corpus, which is a
+          //      reasonable proxy for "more canonical".
+          //
+          // If nothing overlaps we fall back to the autocorrected sentence
+          // — the model still gets a clean prompt, just not a routed one.
+          let routedPrompt: string | null = null;
+          if (meaningful.length > 0) {
+            const meaningfulSet = new Set(meaningful);
+            const knownPrompts = llmConfig.corpus
+              .split("\n")
+              .filter((l) => /^\s*User:\s/i.test(l))
+              .map((l) => l.replace(/^\s*User:\s*/i, ""));
+            let bestScore = 0;
+            for (const kp of knownPrompts) {
+              const kpNormalized = normalizePromptForLLM(kp);
+              const kpCore = new Set(
+                kpNormalized
+                  .split(" ")
+                  .filter((w) => w && !OOV_STOP_WORDS.has(w)),
+              );
+              let overlap = 0;
+              for (const w of kpCore) {
+                if (meaningfulSet.has(w)) overlap++;
+              }
+              if (overlap > bestScore) {
+                bestScore = overlap;
+                routedPrompt = kpNormalized;
+              }
+            }
+          }
+
+          // Use the routed canonical prompt when one was found; otherwise
+          // fall back to the typo-fixed sentence so the model still sees
+          // a clean version of what the user actually typed.
+          normalizedInput = routedPrompt ?? correctedWords.join(" ");
         }
 
         const id = `g-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
