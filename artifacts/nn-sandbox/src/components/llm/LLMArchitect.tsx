@@ -220,8 +220,19 @@ export function LLMArchitect({
         setUploadError("No usable paragraphs found in that file.");
         return;
       }
+      // Per-paragraph bypass for pre-formatted instruction-tuning datasets:
+      // if the user has already structured a paragraph as a `User:` turn we
+      // pass it through verbatim. Anything else is raw prose, so we wrap it
+      // in the default `tell me more` prompt so the corpus still matches the
+      // Q&A shape the model is trained to chat in. Mixing both styles inside
+      // a single file is fine — each paragraph is decided independently.
       const formattedText = paragraphs
-        .map((p) => `User: tell me more\nBot: ${p.trim()}`)
+        .map((p) => {
+          const trimmed = p.trim();
+          return trimmed.startsWith("User:")
+            ? trimmed
+            : `User: tell me more\nBot: ${trimmed}`;
+        })
         .join("\n\n");
       addDataset(`Import: ${file.name}`, formattedText);
       setUploadInfo({ name: file.name, paragraphs: paragraphs.length });
