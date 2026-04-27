@@ -124,6 +124,25 @@ function normalizePromptForLLM(text: string): string {
     .trim();
 }
 
+// Function-word filter for the OOV shield in `generateFromWorker`. These are
+// the connectors that the model's training prompts ("tell me about X",
+// "what is X") are wrapped in — they almost always exist in the vocab and
+// would mask a prompt whose actual content words are all unknown. Stripping
+// them lets us decide "is the *topic* foreign?" rather than "are any of the
+// surface tokens foreign?".
+const OOV_STOP_WORDS = new Set([
+  "tell",
+  "me",
+  "about",
+  "what",
+  "is",
+  "a",
+  "the",
+]);
+
+const OOV_FALLBACK_REPLY =
+  "I don't know the answer to that. I haven't been trained on this topic yet.";
+
 function uniqueChars(s: string): number {
   return new Set(s).size;
 }
@@ -497,6 +516,42 @@ export default function App() {
           resolve("(model not ready)");
           return;
         }
+
+        const normalizedInput = normalizePromptForLLM(seed);
+
+        // ── OOV semantic shield ────────────────────────────────────────────
+        // Before paying the cost (and the hallucination risk) of an inference
+        // pass, sniff the prompt against the live training vocabulary. If the
+        // user is asking about a topic whose every meaningful word is foreign
+        // to the corpus, the worker would otherwise emit confidently-worded
+        // nonsense — better to admit ignorance.
+        //
+        // The check is intentionally word-level only:
+        //  • In word mode the vocab IS a set of words, so "unseen word" maps
+        //    cleanly onto "untaught topic".
+        //  • In char mode the vocab is single characters; almost any English
+        //    prompt trivially "matches" so the test is meaningless. Skip it
+        //    rather than fire a false negative shield.
+        //
+        // Mirrors the worker's own pipeline (`normalizeText` → `tokenize`)
+        // exactly so a word judged "in vocab" here is the same word the
+        // worker would have looked up.
+        if (llmConfig.tokenization === "word") {
+          const promptWords = normalizedInput.split(" ").filter(Boolean);
+          const meaningful = promptWords.filter(
+            (w) => !OOV_STOP_WORDS.has(w),
+          );
+          if (meaningful.length > 0) {
+            const corpusVocab = new Set(
+              tokenize(normalizePromptForLLM(llmConfig.corpus), "word"),
+            );
+            if (meaningful.every((w) => !corpusVocab.has(w))) {
+              resolve(OOV_FALLBACK_REPLY);
+              return;
+            }
+          }
+        }
+
         const id = `g-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         pendingGenRef.current.set(id, resolve);
 
@@ -507,7 +562,6 @@ export default function App() {
         // The trailing "bot " forces the model to predict the next token
         // *after* the speaker tag rather than wasting capacity re-generating
         // the tag itself (which caused hallucinations and empty replies).
-        const normalizedInput = normalizePromptForLLM(seed);
         const systemPart = llmConfig.systemPrompt
           ? normalizePromptForLLM(llmConfig.systemPrompt) + " "
           : "";
@@ -521,7 +575,12 @@ export default function App() {
           temperature: llmConfig.temperature,
         });
       }),
-    [llmConfig.temperature, llmConfig.systemPrompt],
+    [
+      llmConfig.temperature,
+      llmConfig.systemPrompt,
+      llmConfig.corpus,
+      llmConfig.tokenization,
+    ],
   );
 
   const requestLLMExport = useCallback((): Promise<CharLMWeights | null> => {
