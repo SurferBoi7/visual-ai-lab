@@ -143,6 +143,35 @@ const OOV_STOP_WORDS = new Set([
 const OOV_FALLBACK_REPLY =
   "I don't know the answer to that. I haven't been trained on this topic yet.";
 
+// Standard Levenshtein edit distance. Uses the two-row DP variant so memory
+// stays at O(min(m, n)) instead of O(m * n) — matters when the autocorrect
+// pass scans an unknown user word against every entry in a large vocab.
+// Returns the minimum number of single-character insertions, deletions, or
+// substitutions needed to transform `a` into `b`.
+function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = new Array<number>(n + 1);
+  let curr = new Array<number>(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    const ac = a.charCodeAt(i - 1);
+    for (let j = 1; j <= n; j++) {
+      const cost = ac === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(
+        curr[j - 1] + 1, // insertion
+        prev[j] + 1, // deletion
+        prev[j - 1] + cost, // substitution
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+
 function uniqueChars(s: string): number {
   return new Set(s).size;
 }
@@ -517,39 +546,75 @@ export default function App() {
           return;
         }
 
-        const normalizedInput = normalizePromptForLLM(seed);
+        let normalizedInput = normalizePromptForLLM(seed);
 
-        // ── OOV semantic shield ────────────────────────────────────────────
-        // Before paying the cost (and the hallucination risk) of an inference
-        // pass, sniff the prompt against the live training vocabulary. If the
-        // user is asking about a topic whose every meaningful word is foreign
-        // to the corpus, the worker would otherwise emit confidently-worded
-        // nonsense — better to admit ignorance.
+        // ── Autocorrect + OOV semantic shield (word mode only) ─────────────
+        // Word-level tokenization is brittle: a single typo turns a valid
+        // training word into an unknown token, which would otherwise either
+        // fire the OOV shield or get fed to the model as gibberish. So we
+        // do two things in sequence on the normalized prompt:
         //
-        // The check is intentionally word-level only:
-        //  • In word mode the vocab IS a set of words, so "unseen word" maps
-        //    cleanly onto "untaught topic".
-        //  • In char mode the vocab is single characters; almost any English
-        //    prompt trivially "matches" so the test is meaningless. Skip it
-        //    rather than fire a false negative shield.
+        //  1. AUTOCORRECT each unknown content word against the live vocab
+        //     using Levenshtein distance, snapping it to its nearest
+        //     neighbour when the edit distance is small enough that the
+        //     user clearly *meant* the vocab word:
+        //        • words < 5 chars  → tolerate at most 1 edit
+        //        • words ≥ 5 chars  → tolerate up to 2 edits
+        //     Stopwords and already-known words are passed through.
+        //
+        //  2. Re-run the OOV shield against the *corrected* words. A typo
+        //     we successfully fixed should now be in vocab and proceed to
+        //     the model; only genuinely foreign topics still trip the shield.
         //
         // Mirrors the worker's own pipeline (`normalizeText` → `tokenize`)
         // exactly so a word judged "in vocab" here is the same word the
         // worker would have looked up.
+        //
+        // Char mode is intentionally excluded: its vocab is single
+        // characters, so neither typo-snapping nor "unseen word" is a
+        // meaningful concept.
         if (llmConfig.tokenization === "word") {
           const promptWords = normalizedInput.split(" ").filter(Boolean);
-          const meaningful = promptWords.filter(
+          const corpusVocab = new Set(
+            tokenize(normalizePromptForLLM(llmConfig.corpus), "word"),
+          );
+          const corpusVocabArr = Array.from(corpusVocab);
+
+          const correctedWords = promptWords.map((w) => {
+            if (corpusVocab.has(w) || OOV_STOP_WORDS.has(w)) return w;
+            const threshold = w.length < 5 ? 1 : 2;
+            let best = w;
+            let bestDist = Infinity;
+            for (const v of corpusVocabArr) {
+              // Length-difference lower bound: levenshtein(a, b) is at
+              // least ||a| - |b||, so candidates that are too far apart
+              // in length can be skipped without running the full DP —
+              // typically prunes most of a large vocab for free.
+              if (Math.abs(v.length - w.length) > threshold) continue;
+              const d = levenshteinDistance(w, v);
+              if (d < bestDist) {
+                bestDist = d;
+                best = v;
+                if (d === 0) break;
+              }
+            }
+            return bestDist <= threshold ? best : w;
+          });
+
+          const meaningful = correctedWords.filter(
             (w) => !OOV_STOP_WORDS.has(w),
           );
-          if (meaningful.length > 0) {
-            const corpusVocab = new Set(
-              tokenize(normalizePromptForLLM(llmConfig.corpus), "word"),
-            );
-            if (meaningful.every((w) => !corpusVocab.has(w))) {
-              resolve(OOV_FALLBACK_REPLY);
-              return;
-            }
+          if (
+            meaningful.length > 0 &&
+            meaningful.every((w) => !corpusVocab.has(w))
+          ) {
+            resolve(OOV_FALLBACK_REPLY);
+            return;
           }
+
+          // Feed the corrected sentence to the worker so the model sees
+          // the typo-fixed version it actually knows how to respond to.
+          normalizedInput = correctedWords.join(" ");
         }
 
         const id = `g-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
