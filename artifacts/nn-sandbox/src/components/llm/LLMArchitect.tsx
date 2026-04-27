@@ -4,7 +4,6 @@ import {
   Sparkles,
   BookOpen,
   Upload,
-  FileText,
   Lightbulb,
   Type,
   WholeWord,
@@ -182,34 +181,65 @@ export function LLMArchitect({
     onDatasetsChange(datasets.filter((d) => d.id !== id));
   };
 
-  // ── Formatted .txt upload (replaces base dataset) ─────────────────────────
+  // ── Text-file upload pipeline (shared) ────────────────────────────────────
+  // ONE transformer powers every .txt upload surface — the prominent drop zone
+  // AND the Bulk Text Formatter button — so behaviour is identical regardless
+  // of which the user reaches for. Raw prose is always split on blank lines
+  // and reshaped into User/Bot turns; the resulting dataset is named
+  // `Import: <filename>`. There is no longer a "raw dump" path: historically
+  // the drop zone wrote the file body straight into a dataset prefixed
+  // "Uploaded:", silently bypassing the formatter and producing corpora the
+  // model couldn't actually learn from.
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploadInfo, setUploadInfo] = useState<{
     name: string;
-    bytes: number;
-    truncated: boolean;
+    paragraphs: number;
   } | null>(null);
-  const [readError, setReadError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const handleFormattedFile = (files: FileList | null) => {
-    setReadError(null);
-    const f = files?.[0];
-    if (!f) return;
-    if (!/\.txt$/i.test(f.name) && !f.type.startsWith("text/")) {
-      setReadError("Only .txt files are supported.");
+  const processTextUpload = (file: File) => {
+    setUploadError(null);
+    setUploadInfo(null);
+    if (!/\.txt$/i.test(file.name) && !file.type.startsWith("text/")) {
+      setUploadError("Only .txt files are supported.");
       return;
     }
     const reader = new FileReader();
-    reader.onerror = () => setReadError("Could not read that file.");
-    reader.onload = () => {
-      const raw = String(reader.result ?? "");
-      const truncated = raw.length > MAX_CORPUS_BYTES;
-      const text = truncated ? raw.slice(0, MAX_CORPUS_BYTES) : raw;
-      setUploadInfo({ name: f.name, bytes: f.size, truncated });
-      addDataset(`Uploaded: ${f.name}`, text);
+    reader.onerror = () => setUploadError("Could not read that file.");
+    reader.onload = (e) => {
+      const rawText = (e.target?.result as string) ?? "";
+      // `\n\s*\n` matches a blank line that may contain trailing whitespace
+      // (Windows `\r\n\r\n`, soft-wrapped editors, etc.) — strictly broader
+      // than `\n\n+` so real-world `.txt` files split into paragraphs cleanly.
+      const paragraphs = rawText
+        .split(/\n\s*\n/)
+        .filter((p) => p.trim().length > 0);
+      if (paragraphs.length === 0) {
+        setUploadError("No usable paragraphs found in that file.");
+        return;
+      }
+      const formattedText = paragraphs
+        .map((p) => `User: tell me more\nBot: ${p.trim()}`)
+        .join("\n\n");
+      addDataset(`Import: ${file.name}`, formattedText);
+      setUploadInfo({ name: file.name, paragraphs: paragraphs.length });
     };
-    reader.readAsText(f);
+    reader.readAsText(file);
+  };
+
+  // Wrapper for the hidden <input type="file"> onChange handlers. Pulls the
+  // first selected file, runs it through the shared transformer, then resets
+  // the input's value so re-selecting the same file still fires a fresh
+  // change event.
+  const handleFileInputChange = (
+    input: HTMLInputElement | null,
+    files: FileList | null,
+  ) => {
+    const f = files?.[0];
+    if (f) processTextUpload(f);
+    if (input) input.value = "";
   };
 
   // ── Fact Teacher ──────────────────────────────────────────────────────────
@@ -277,51 +307,6 @@ export function LLMArchitect({
       setWikiStatus("error");
       setWikiMsg("Network error — check your connection and try again.");
     }
-  };
-
-  // ── Bulk Text Formatter ───────────────────────────────────────────────────
-  const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
-  const [bulkFormatInfo, setBulkFormatInfo] = useState<{
-    name: string;
-    paragraphs: number;
-  } | null>(null);
-  const [bulkError, setBulkError] = useState<string | null>(null);
-
-  const handleBulkFile = (files: FileList | null) => {
-    setBulkError(null);
-    setBulkFormatInfo(null);
-    const f = files?.[0];
-    if (!f) return;
-    if (!/\.txt$/i.test(f.name) && !f.type.startsWith("text/")) {
-      setBulkError("Only .txt files are supported.");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onerror = () => setBulkError("Could not read that file.");
-    reader.onload = (e) => {
-      // Hard-enforce the conversational transformation. Raw prose must NEVER
-      // hit the dataset untouched — every paragraph becomes a User/Bot turn
-      // so the resulting corpus matches the same Q&A shape the model is
-      // trained to chat in.
-      const rawText = (e.target?.result as string) ?? "";
-      // `\n\s*\n` matches a blank line that may contain trailing whitespace
-      // (Windows `\r\n\r\n`, soft-wrapped editors, etc.) — strictly broader
-      // than `\n\n+` so real-world `.txt` files split into paragraphs cleanly.
-      const paragraphs = rawText
-        .split(/\n\s*\n/)
-        .filter((p) => p.trim().length > 0);
-      if (paragraphs.length === 0) {
-        setBulkError("No usable paragraphs found in that file.");
-        return;
-      }
-      const formattedText = paragraphs
-        .map((p) => `User: tell me more\nBot: ${p.trim()}`)
-        .join("\n\n");
-      addDataset(`Import: ${f.name}`, formattedText);
-      setBulkFormatInfo({ name: f.name, paragraphs: paragraphs.length });
-      if (bulkFileInputRef.current) bulkFileInputRef.current.value = "";
-    };
-    reader.readAsText(f);
   };
 
   // ── Derived values ────────────────────────────────────────────────────────
@@ -544,11 +529,18 @@ export function LLMArchitect({
           </div>
         </div>
 
-        {/* Formatted .txt drop zone */}
+        {/* .txt drop zone — shares the processTextUpload pipeline with the
+            Bulk Text Formatter button below, so any file dropped here is
+            auto-split into paragraphs and reshaped into User/Bot turns. */}
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFormattedFile(e.dataTransfer.files); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) processTextUpload(f);
+          }}
           onClick={() => fileInputRef.current?.click()}
           role="button"
           tabIndex={0}
@@ -561,38 +553,35 @@ export function LLMArchitect({
         >
           <Upload className="size-5 text-sky-300" />
           <div className="text-xs font-semibold text-slate-200">
-            Drop a formatted <code className="text-sky-300">.txt</code> corpus here
+            Drop a <code className="text-sky-300">.txt</code> file here
           </div>
           <div className="text-[10px] text-slate-500">
-            Added as a new dataset · max {formatBytes(MAX_CORPUS_BYTES)}
+            Paragraphs become <code className="font-mono">User:/Bot:</code> turns · max {formatBytes(MAX_CORPUS_BYTES)}
           </div>
           <input
             ref={fileInputRef}
             type="file"
             accept=".txt,text/plain"
             className="hidden"
-            onChange={(e) => handleFormattedFile(e.target.files)}
+            onChange={(e) => handleFileInputChange(fileInputRef.current, e.target.files)}
           />
         </div>
 
         {uploadInfo && (
-          <div className="flex items-start gap-2 rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2">
-            <FileText className="size-3.5 text-emerald-300 mt-0.5 shrink-0" />
-            <div className="min-w-0 flex-1">
-              <div className="text-[11px] text-slate-200 truncate">{uploadInfo.name}</div>
-              <div className="text-[10px] text-slate-500">
-                {formatBytes(uploadInfo.bytes)}
-                {uploadInfo.truncated && (
-                  <span className="text-amber-300"> · truncated to {formatBytes(MAX_CORPUS_BYTES)}</span>
-                )}
-              </div>
-            </div>
+          <div className="flex items-start gap-1.5 text-[10px] text-emerald-300">
+            <CheckCircle2 className="size-3.5 shrink-0 mt-0.5" />
+            <span>
+              <span className="font-semibold">{uploadInfo.name}</span>{" "}
+              — {uploadInfo.paragraphs} paragraph
+              {uploadInfo.paragraphs !== 1 ? "s" : ""} formatted and added as a dataset.
+            </span>
           </div>
         )}
 
-        {readError && (
-          <div className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-lg px-2.5 py-1.5">
-            {readError}
+        {uploadError && (
+          <div className="flex items-start gap-1.5 text-[10px] text-rose-300">
+            <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+            {uploadError}
           </div>
         )}
 
@@ -717,22 +706,22 @@ export function LLMArchitect({
               type="file"
               accept=".txt,text/plain"
               className="hidden"
-              onChange={(e) => handleBulkFile(e.target.files)}
+              onChange={(e) => handleFileInputChange(bulkFileInputRef.current, e.target.files)}
             />
-            {bulkFormatInfo && (
+            {uploadInfo && (
               <div className="flex items-start gap-1.5 text-[10px] text-emerald-300">
                 <CheckCircle2 className="size-3.5 shrink-0 mt-0.5" />
                 <span>
-                  <span className="font-semibold">{bulkFormatInfo.name}</span>{" "}
-                  — {bulkFormatInfo.paragraphs} paragraph
-                  {bulkFormatInfo.paragraphs !== 1 ? "s" : ""} formatted and added as a dataset.
+                  <span className="font-semibold">{uploadInfo.name}</span>{" "}
+                  — {uploadInfo.paragraphs} paragraph
+                  {uploadInfo.paragraphs !== 1 ? "s" : ""} formatted and added as a dataset.
                 </span>
               </div>
             )}
-            {bulkError && (
+            {uploadError && (
               <div className="flex items-start gap-1.5 text-[10px] text-rose-300">
                 <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
-                {bulkError}
+                {uploadError}
               </div>
             )}
           </div>
