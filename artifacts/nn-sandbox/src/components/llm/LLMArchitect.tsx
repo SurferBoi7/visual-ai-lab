@@ -75,14 +75,6 @@ interface Props {
 
 export const MAX_CORPUS_BYTES = 1_000_000;
 
-const BULK_USER_PROMPTS = [
-  "tell me a story",
-  "tell me more",
-  "keep going",
-  "what happens next",
-  "continue",
-];
-
 // Truncate a Wikipedia extract to the first N sentences.
 function truncateToSentences(text: string, n: number): string {
   const sentences = text.split(".").filter((s) => s.trim().length > 0);
@@ -306,27 +298,26 @@ export function LLMArchitect({
     }
     const reader = new FileReader();
     reader.onerror = () => setBulkError("Could not read that file.");
-    reader.onload = () => {
-      const raw = String(reader.result ?? "");
-      const rawParagraphs = raw.split(/\n\n+/).flatMap((chunk) => {
-        const trimmed = chunk.trim();
-        return trimmed ? [trimmed] : [];
-      });
-      const paragraphs = rawParagraphs.filter((p) => p.length > 0);
+    reader.onload = (e) => {
+      // Hard-enforce the conversational transformation. Raw prose must NEVER
+      // hit the dataset untouched — every paragraph becomes a User/Bot turn
+      // so the resulting corpus matches the same Q&A shape the model is
+      // trained to chat in.
+      const rawText = (e.target?.result as string) ?? "";
+      // `\n\s*\n` matches a blank line that may contain trailing whitespace
+      // (Windows `\r\n\r\n`, soft-wrapped editors, etc.) — strictly broader
+      // than `\n\n+` so real-world `.txt` files split into paragraphs cleanly.
+      const paragraphs = rawText
+        .split(/\n\s*\n/)
+        .filter((p) => p.trim().length > 0);
       if (paragraphs.length === 0) {
         setBulkError("No usable paragraphs found in that file.");
         return;
       }
-      // Format each paragraph as a User/Bot turn (single \n inside the turn,
-      // double \n\n between turns) — matches the documented Q&A corpus format
-      // so the model can learn turn-taking from raw prose uploads.
-      const block = paragraphs
-        .map(
-          (p, i) =>
-            `User: ${BULK_USER_PROMPTS[i % BULK_USER_PROMPTS.length]}\nBot: ${p}`,
-        )
+      const formattedText = paragraphs
+        .map((p) => `User: tell me more\nBot: ${p.trim()}`)
         .join("\n\n");
-      addDataset(`Import: ${f.name}`, block);
+      addDataset(`Import: ${f.name}`, formattedText);
       setBulkFormatInfo({ name: f.name, paragraphs: paragraphs.length });
       if (bulkFileInputRef.current) bulkFileInputRef.current.value = "";
     };
