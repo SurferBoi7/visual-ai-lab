@@ -9,6 +9,7 @@ import {
   tokenize,
   sampleFromProbs,
   PAD_TOKEN,
+  EOS_TOKEN,
   // Re-exported only because makeSample still uses generateTokens for the
   // training-tick "live dream" preview where stop-sequencing isn't desired.
   type Tokenization,
@@ -29,14 +30,17 @@ const STOP_SEQUENCES = ["user", " user"];
 // prompts — so the vocabulary stays small and consistent (e.g. "Sky", "sky"
 // and "sky's" all collapse to the single token "sky").
 //
-// IMPORTANT: the literal "<PAD>" sentinel must survive normalization intact.
-// A naive `.toLowerCase().replace(/[^\p{L}\p{N}\s]+/u, " ")` would strip the
-// angle brackets and lowercase the body, leaving the bare word "pad" — which
-// the vocab builder would then learn as a regular content token, breaking
-// both the inference output filter and the document-separator semantics.
+// IMPORTANT: the literal "<PAD>" and "<EOS>" sentinels must survive
+// normalization intact. A naive `.toLowerCase().replace(/[^\p{L}\p{N}\s]+/u,
+// " ")` would strip the angle brackets and lowercase the body, leaving the
+// bare words "pad" / "eos" — which the vocab builder would then learn as
+// regular content tokens, breaking both the inference output filter and the
+// document-separator / end-of-sequence semantics.
 //
-// To prevent that, split the input on PAD_TOKEN first, normalize only the
-// real-text chunks, and stitch them back together with PAD_TOKEN as the glue.
+// To prevent that, split the input on the special-token regex (keeping the
+// matches as their own segments via a capture group), normalize only the
+// real-text chunks, and stitch everything back together with the specials
+// re-inserted with surrounding spaces so they remain stand-alone tokens.
 export function normalizeText(text: string): string {
   const cleanChunk = (s: string) =>
     s
@@ -44,14 +48,16 @@ export function normalizeText(text: string): string {
       .replace(/[^\p{L}\p{N}\s]+/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
-  if (!text.includes(PAD_TOKEN)) return cleanChunk(text);
-  // Pad each PAD_TOKEN with surrounding spaces so it remains a stand-alone
-  // token after the downstream tokenizer runs (otherwise "...end<PAD>start..."
-  // collapses into "end<PAD>start" with no whitespace boundary in word mode).
-  return text
-    .split(PAD_TOKEN)
-    .map(cleanChunk)
-    .join(` ${PAD_TOKEN} `)
+  if (!text.includes(PAD_TOKEN) && !text.includes(EOS_TOKEN)) {
+    return cleanChunk(text);
+  }
+  // String#split with a capture group keeps the matched delimiter as its own
+  // array element, so `"a<PAD>b<EOS>c".split(/(<PAD>|<EOS>)/)` →
+  // `["a", "<PAD>", "b", "<EOS>", "c"]`.
+  const parts = text.split(/(<PAD>|<EOS>)/g);
+  return parts
+    .map((p) => (p === PAD_TOKEN || p === EOS_TOKEN ? ` ${p} ` : cleanChunk(p)))
+    .join("")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -80,9 +86,9 @@ interface InitOpts {
 // it can only have been produced by the word-level tokenizer.
 function inferTokenizationFromVocab(vocabArr: string[]): Tokenization {
   for (const t of vocabArr) {
-    // Skip the special <PAD> sentinel — every vocab now contains it
-    // regardless of tokenization mode, so it can't be used as a signal.
-    if (t === PAD_TOKEN) continue;
+    // Skip the special <PAD> / <EOS> sentinels — every vocab now contains
+    // them regardless of tokenization mode, so they can't be used as a signal.
+    if (t === PAD_TOKEN || t === EOS_TOKEN) continue;
     if (typeof t === "string" && t.length > 1) return "word";
   }
   return "char";
@@ -291,6 +297,9 @@ self.onmessage = (e: MessageEvent) => {
       // Prefer the dedicated <PAD> sentinel; fall back to space for legacy
       // models that pre-date the special token, then to vocab index 0.
       const padId = stoi[PAD_TOKEN] ?? stoi[" "] ?? 0;
+      // EOS id is optional — older saved models pre-date the special token,
+      // so `undefined` here just means "never break early on EOS" for them.
+      const eosId = stoi[EOS_TOKEN];
 
       // Build the rolling context window from the (possibly empty) seed.
       // If the prompt is shorter than the context window, prepend <PAD>
@@ -316,6 +325,10 @@ self.onmessage = (e: MessageEvent) => {
         // and renormalize, so the model can't sample low-probability junk.
         const filtered = applyTopK(probs, topK);
         const next = sampleFromProbs(filtered, temp);
+        // Hard stop on <EOS>: this is the model's trained "I'm done" signal.
+        // Break BEFORE advancing the context or appending the token so the
+        // sentinel never leaks into the user-visible output.
+        if (eosId !== undefined && next === eosId) break;
         const tok = vocab[next];
         // Always advance the rolling context with the sampled token so the
         // model's internal state stays coherent, but suppress <PAD> from the

@@ -135,11 +135,11 @@ export type Tokenization = "char" | "word";
 // own token, which keeps the vocabulary compact while still letting the model
 // learn punctuation.
 //
-// Both modes recognise the literal substring "<PAD>" as the single PAD_TOKEN
-// special token rather than splitting it into characters/parts. This lets
-// upstream code physically inject document separators into the corpus that
-// flow through to the model as the special padding id (see
-// LLMArchitect.tsx's dataset combiner).
+// Both modes recognise the literal substrings "<PAD>" and "<EOS>" as single
+// special tokens rather than splitting them into characters/parts. This lets
+// upstream code physically inject document separators (PAD) and end-of-
+// sequence markers (EOS) into the corpus that flow through to the model as
+// the dedicated special-token ids (see LLMArchitect.tsx's dataset combiner).
 export function tokenize(text: string, mode: Tokenization): string[] {
   const out: string[] = [];
   let i = 0;
@@ -147,6 +147,11 @@ export function tokenize(text: string, mode: Tokenization): string[] {
     if (text.startsWith(PAD_TOKEN, i)) {
       out.push(PAD_TOKEN);
       i += PAD_TOKEN.length;
+      continue;
+    }
+    if (text.startsWith(EOS_TOKEN, i)) {
+      out.push(EOS_TOKEN);
+      i += EOS_TOKEN.length;
       continue;
     }
     if (mode === "char") {
@@ -192,16 +197,25 @@ export function joinTokens(tokens: string[], mode: Tokenization): string {
 // real semantic meaning for — instead of an out-of-band sentinel.
 export const PAD_TOKEN = "<PAD>";
 
+// Special end-of-sequence token. Trained to appear at the end of every
+// individual dataset (see LLMArchitect.tsx's dataset combiner), so the model
+// learns "this is where a coherent thought stops". The inference loop in
+// text.worker.ts watches for it and breaks immediately, killing infinite
+// generation loops on short factual prompts.
+export const EOS_TOKEN = "<EOS>";
+
 export function buildVocab(tokens: string[]): {
   chars: string[];
   stoi: Record<string, number>;
 } {
   const set = new Set(tokens);
-  // The corpus should never contribute the literal "<PAD>" string itself —
-  // both tokenizers split "<", "P", "A", "D", ">" into separate tokens — but
-  // we guard defensively so the special token always lives at exactly index 0.
+  // The corpus should never contribute the literal "<PAD>" / "<EOS>" strings
+  // themselves — both tokenizers split them into separate single-char tokens —
+  // but we guard defensively so the specials always sit at fixed low indices
+  // (PAD at 0, EOS at 1) regardless of corpus content.
   set.delete(PAD_TOKEN);
-  const chars = [PAD_TOKEN, ...Array.from(set).sort()];
+  set.delete(EOS_TOKEN);
+  const chars = [PAD_TOKEN, EOS_TOKEN, ...Array.from(set).sort()];
   const stoi: Record<string, number> = {};
   chars.forEach((c, i) => (stoi[c] = i));
   return { chars, stoi };
@@ -313,6 +327,9 @@ export function generateTokens(
   // Prefer the dedicated <PAD> sentinel; fall back to space (legacy models)
   // and finally vocab index 0 so we never crash on a malformed vocab.
   const padId = stoi[PAD_TOKEN] ?? stoi[" "] ?? 0;
+  // EOS id is optional — older saved models pre-date the special token, so
+  // `undefined` here just means "never stop early on EOS" for those vocabs.
+  const eosId = stoi[EOS_TOKEN];
   const seedIds = seedTokens.map((t) =>
     stoi[t] !== undefined ? stoi[t] : padId,
   );
@@ -328,6 +345,10 @@ export function generateTokens(
   for (let i = 0; i < length; i++) {
     const { probs } = net.forward(ctx);
     const next = sampleFromProbs(probs, temperature);
+    // Hard stop the moment the model emits <EOS>: that's the trained signal
+    // that the current "thought" is complete. Never include EOS in the
+    // visible output — it's an out-of-band sentinel, not real text.
+    if (eosId !== undefined && next === eosId) break;
     const tok = itos[next];
     // Filter <PAD> out of the visible output but still let it flow through
     // the rolling context so the model's internal state stays coherent.

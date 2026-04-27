@@ -24,7 +24,7 @@ import {
   EyeOff,
 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
-import { PAD_TOKEN } from "@/lib/textnet";
+import { PAD_TOKEN, EOS_TOKEN } from "@/lib/textnet";
 
 export type Tokenization = "char" | "word";
 
@@ -144,14 +144,23 @@ export function LLMArchitect({
   // are NEVER reconstructed from `config.corpus`.
   const lastCombinedRef = useRef<string | null>(null);
 
-  // Whenever datasets change, aggregate and push to parent. We physically
-  // inject a wall of <PAD> tokens BETWEEN every active dataset and as a
-  // PREFIX to the very first one, so each dataset reads as an independent
-  // document instead of one giant continuous string. This stops cross-document
-  // contamination — e.g. the model learning that "Bot:" from dataset A flows
-  // straight into the first sentence of dataset B.
+  // Whenever datasets change, aggregate and push to parent. Two structural
+  // markers get physically injected into the corpus here:
+  //
+  // 1. <EOS> — appended to the END of every active dataset BEFORE the PAD
+  //    wall, so the model learns "when the factual paragraph finishes, emit
+  //    <EOS>". The inference loop in text.worker.ts watches for this token
+  //    and breaks immediately, killing infinite generation loops.
+  //
+  // 2. <PAD> wall — placed BETWEEN every active dataset and as a PREFIX to
+  //    the very first one, so each dataset reads as an independent document
+  //    instead of one giant continuous string. This stops cross-document
+  //    contamination — e.g. "Bot:" from dataset A flowing straight into the
+  //    first sentence of dataset B.
   useEffect(() => {
-    const active = datasets.filter((d) => d.active).map((d) => d.text);
+    const active = datasets
+      .filter((d) => d.active)
+      .map((d) => `${d.text}\n${EOS_TOKEN}`);
     const combined = (
       active.length === 0
         ? ""
@@ -308,13 +317,16 @@ export function LLMArchitect({
         setBulkError("No usable paragraphs found in that file.");
         return;
       }
+      // Format each paragraph as a User/Bot turn (single \n inside the turn,
+      // double \n\n between turns) — matches the documented Q&A corpus format
+      // so the model can learn turn-taking from raw prose uploads.
       const block = paragraphs
         .map(
           (p, i) =>
             `User: ${BULK_USER_PROMPTS[i % BULK_USER_PROMPTS.length]}\nBot: ${p}`,
         )
-        .join("\n");
-      addDataset(`Bulk: ${f.name}`, block);
+        .join("\n\n");
+      addDataset(`Import: ${f.name}`, block);
       setBulkFormatInfo({ name: f.name, paragraphs: paragraphs.length });
       if (bulkFileInputRef.current) bulkFileInputRef.current.value = "";
     };
