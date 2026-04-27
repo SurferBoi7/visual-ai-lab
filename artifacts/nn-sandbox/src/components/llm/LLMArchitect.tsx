@@ -30,10 +30,13 @@ export type Tokenization = "char" | "word";
 // Wall of <PAD> tokens injected between datasets so the model treats each one
 // as an independent document. Every <PAD> here is recognised by the tokenizer
 // as the single special padding id (not split character-by-character), so a
-// run of 20 of them gives the rolling context window enough room to fully
-// flush the previous topic before the next dataset starts. Newlines on either
-// side keep the separator visually obvious in the corpus textarea too.
-const DATASET_SEPARATOR = `\n${Array(20).fill(PAD_TOKEN).join(" ")}\n`;
+// run of 50 of them gives the rolling context window enough room to fully
+// flush the previous topic before the next dataset starts — the previous
+// 20-PAD wall was leaking facts across documents (Seattle showing up under
+// London, etc.) once we started loading several Wikipedia summaries at once.
+// Newlines on either side keep the separator visually obvious in the corpus
+// textarea too.
+const DATASET_SEPARATOR = `\n${Array(50).fill(PAD_TOKEN).join(" ")}\n`;
 
 export interface LLMConfig {
   corpus: string;
@@ -309,21 +312,15 @@ export function LLMArchitect({
       // Smart truncation: keep only the first 3 sentences to prevent
       // the model from looping over a very long context window.
       const extract = truncateToSentences(rawExtract, 3);
-      // Three phrasings, one answer. Tiny LMs only learn the prompts they
-      // see verbatim, so a user typing the bare topic ("Denver") won't hit
-      // the same response as "tell me about Denver" unless we explicitly
-      // teach all three surface forms to the model. Joining them into a
-      // single dataset entry keeps the Dataset Manager tidy while still
-      // tripling the recall surface — the Intent Router then routes any
-      // of the three to the same canonical training prompt.
-      const variations = [
-        `tell me about ${topic}`,
-        `${topic}`,
-        `what is ${topic}`,
-      ];
-      const text = variations
-        .map((v) => `User: ${v}\nBot: ${extract}`)
-        .join("\n");
+      // One canonical phrasing per topic. The previous 3-variation expansion
+      // was tripling the same answer text into the corpus, which gave the
+      // MLP three near-identical training examples per topic and started
+      // bleeding facts across documents (Seattle answers showing up under
+      // London, etc.). The Intent Router on the read side already maps
+      // bare keywords like "denver" or "what is denver" onto this canonical
+      // "tell me about denver" prompt, so we don't need the data-side
+      // expansion to recover the recall.
+      const text = `User: tell me about ${topic}\nBot: ${extract}`;
       addDataset(`Wiki: ${topic}`, text);
       setWikiStatus("success");
       setWikiMsg(`Added Wikipedia summary for "${topic}" (3 sentences).`);

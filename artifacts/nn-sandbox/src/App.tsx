@@ -612,7 +612,7 @@ export default function App() {
             return;
           }
 
-          // ── Intent router (keyword-overlap with confidence) ──────────
+          // ── Intent router (best-overlap-wins) ────────────────────────
           // Tiny LMs only reliably reproduce prompts they were literally
           // trained on. A user typing the bare keyword "liverpool" never
           // appears verbatim in the corpus, even though the corpus has a
@@ -624,26 +624,20 @@ export default function App() {
           //   1. Pull every `User: …` line out of the corpus, strip the
           //      speaker tag, and defensively chop off any inline `Bot: …`
           //      tail so a malformed single-line entry can't leak the
-          //      assistant's reply into the keyword pool.
+          //      assistant's reply into the keyword pool. The `\bBot:`
+          //      word boundary keeps incidental words like "robot:" from
+          //      matching.
           //   2. For each, normalize and drop stopwords to get the prompt's
           //      "core keywords" (the same shape as `meaningful`).
-          //   3. Compute a CONFIDENCE SCORE = overlap / |kpCore|. Dividing
-          //      by the training prompt's keyword count (rather than just
-          //      counting the raw overlap) prevents a single shared word
-          //      from hijacking long, specific prompts — a 1-of-5 match is
-          //      almost certainly coincidence, while a 1-of-1 match is
-          //      almost certainly the user's intent.
-          //   4. Only route when confidence ≥ 0.5 — at least half of the
-          //      training prompt's content words must be present. Ties on
-          //      confidence resolve to whichever prompt appears first in
-          //      the corpus, which is a reasonable proxy for "more
-          //      canonical".
+          //   3. Score each prompt by the size of its core-keyword set
+          //      intersected with the user's meaningful keyword set.
+          //   4. The highest-scoring prompt with a non-zero overlap wins
+          //      and silently replaces the user's input. Ties resolve to
+          //      whichever prompt appears first in the corpus, which is a
+          //      reasonable proxy for "more canonical".
           //
           // Skip the router entirely when `meaningful` is empty: there's
-          // nothing to overlap on, so any routing would be a coin flip
-          // dressed up as confidence.
-          //
-          // If nothing clears the threshold we fall back to the
+          // nothing to overlap on. If nothing overlaps we fall back to the
           // autocorrected sentence — the model still gets a clean prompt,
           // just not a routed one.
           let routedPrompt: string | null = null;
@@ -655,14 +649,10 @@ export default function App() {
               .map((l) =>
                 l
                   .replace(/^\s*User:\s*/i, "")
-                  // Belt-and-suspenders: strip any inline `Bot:` tail so a
-                  // hand-typed corpus that crammed both turns onto one line
-                  // can't pollute the user-side keyword pool. Word boundary
-                  // keeps incidental words like "robot:" from matching.
                   .replace(/\bBot:\s.*$/i, "")
                   .trim(),
               );
-            let bestConfidence = 0;
+            let bestScore = 0;
             for (const kp of knownPrompts) {
               const kpNormalized = normalizePromptForLLM(kp);
               const kpCore = new Set(
@@ -670,14 +660,12 @@ export default function App() {
                   .split(" ")
                   .filter((w) => w && !OOV_STOP_WORDS.has(w)),
               );
-              if (kpCore.size === 0) continue;
               let overlap = 0;
               for (const w of kpCore) {
                 if (meaningfulSet.has(w)) overlap++;
               }
-              const confidence = overlap / kpCore.size;
-              if (confidence >= 0.5 && confidence > bestConfidence) {
-                bestConfidence = confidence;
+              if (overlap > bestScore) {
+                bestScore = overlap;
                 routedPrompt = kpNormalized;
               }
             }
