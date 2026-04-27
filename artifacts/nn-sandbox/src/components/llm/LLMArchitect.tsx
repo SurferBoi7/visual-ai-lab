@@ -309,7 +309,21 @@ export function LLMArchitect({
       // Smart truncation: keep only the first 3 sentences to prevent
       // the model from looping over a very long context window.
       const extract = truncateToSentences(rawExtract, 3);
-      const text = `User: tell me about ${topic}\nBot: ${extract}`;
+      // Three phrasings, one answer. Tiny LMs only learn the prompts they
+      // see verbatim, so a user typing the bare topic ("Denver") won't hit
+      // the same response as "tell me about Denver" unless we explicitly
+      // teach all three surface forms to the model. Joining them into a
+      // single dataset entry keeps the Dataset Manager tidy while still
+      // tripling the recall surface — the Intent Router then routes any
+      // of the three to the same canonical training prompt.
+      const variations = [
+        `tell me about ${topic}`,
+        `${topic}`,
+        `what is ${topic}`,
+      ];
+      const text = variations
+        .map((v) => `User: ${v}\nBot: ${extract}`)
+        .join("\n");
       addDataset(`Wiki: ${topic}`, text);
       setWikiStatus("success");
       setWikiMsg(`Added Wikipedia summary for "${topic}" (3 sentences).`);
