@@ -1,0 +1,35 @@
+Act as a Principal UX Architect and Lead React Engineer. We are executing a total structural pivot. The app is no longer a dual-mode sandbox; it is an Enterprise AI Platform (like OpenAI Platform or Google Vertex AI) exclusively for Text LLMs. 
+
+Your prime directive: DO NOT alter `textnet.ts`, `text.worker.ts`, or the core inference/training logic. You are heavily refactoring `App.tsx` and the UI layer.
+
+Please execute this complete redesign:
+
+### 1. Purge the Visual MLP
+* Completely remove the `mode` state ("text" vs "visual"). The app is now 100% Text LLM.
+* Delete `ModeToggle`, `NetworkCanvas`, `MLPArchitect`, and any state/logic strictly tied to the 2D point classifier. 
+
+### 2. The Slim Sidebar Navigation
+* Replace the current sidebar with an ultra-slim, dark, icon-driven sidebar (e.g., `w-16` on desktop).
+* It should have 3 main navigation icons: 
+  1. **Chat Sandbox:** (Test the models)
+  2. **Training Lab:** (Manage, build, and train models)
+  3. **Deploy Hub:** (Publish models to external apps)
+
+### 3. Training Lab (Master/Detail Dashboard)
+* **Left Panel (List):** Display a list of all models saved in the library, plus a prominent "+ New Base Model" button.
+* **Right Panel (Detail):** When a model is selected, show the `LLMArchitect` (Architecture sliders, Hyperparameters, and Training Corpus).
+* **Training State:** When `isTraining` is true, dim the configuration panels and display a sleek, animated "Training in Progress" overlay. Add a CSS-based pulse/wave animation next to the live Loss and Epoch telemetry. 
+
+### 4. Chat Sandbox (Minimalist)
+* Make this view ultra-clean. Full height, deep matte background.
+* The chat input bar should be centered at the bottom.
+* Directly next to or above the chat input, add a sleek "Model Selector" dropdown that allows the user to instantly load any saved model from the library into the active worker state.
+
+### 5. Deploy Hub (Secure Linking API)
+* Create a new `DeployHub` component. 
+* It should display the currently loaded model and a "Generate API Key" button. 
+* When clicked, generate a mock secure UUID token (e.g., `sk-tiny-ai-...`). 
+* Display a mock "Endpoint URL" (e.g., `wss://[app-name].replit.dev/api/chat`).
+* Add a sleek UI explanation: "Use this API Key in your consumer chat application to securely bridge to this model's inference engine."
+
+Make the UI extremely premium. Use deep blacks, border-white/5, and a single accent color. Make it look like an internal Google or OpenAI engineer's dashboard.
