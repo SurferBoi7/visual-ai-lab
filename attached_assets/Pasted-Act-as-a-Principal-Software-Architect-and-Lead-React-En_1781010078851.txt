@@ -1,0 +1,34 @@
+Act as a Principal Software Architect and Lead React Engineer. I have migrated this project to a new environment, and you are taking over as the Lead AI Developer. 
+
+We are building an premium, browser-based Text-LLM workshop (the "Tiny AI Foundry"). Do NOT alter `textnet.ts`, `text.worker.ts`, or the core neural network math (matrix multiplication via WebWorkers). You are completely refactoring the UI state management, UX workflow, and all CSS (App.tsx, LLMArchitect.tsx, ChatView.tsx).
+
+Please execute the following platform overhaul:
+
+### 1. Platform Context & The Core Engine (READ FIRST)
+* This is NOT a transformer model; it is a lightweight Multi-Layer Perceptron (neural net) running strictly in the browser tab via WebWorkers.
+* The application manages an array of models called `savedModelsLibrary` (persisted in localStorage or indexedDB).
+* The active neural network config is derived from a selected model in this library.
+
+### 2. The Model Lifecycle Flow (Fixing Persistence Bug)
+Currently, creating a model does not persist it. Fix the workflow:
+* **Step A: The Model Fleet (Tabs/Cards):** The initial view of the 'Training Lab' displays a grid of all models in `savedModelsLibrary`. Add a card: "+ New Base Model".
+* **Step B: Configuration:** Clicking "+ New Base Model" reveals a dark, focused setup pane (Architecture sliders, hyperparams, text corpus selection).
+* **Step C: The Persistence Handle:** We must define a handler: `const saveNewModel = (configData) => { ... }`. When the user is done configuring, this function must:
+  1. Add the *newly defined* config to the `savedModelsLibrary` array state.
+  2. Sync that array state to persistent browser storage.
+  3. Set the active model state to this new index.
+  4. THEN, navigate the user to the Training Dashboard for this newly saved model.
+
+### 3. Training Lab Redesign (Tabs/Mini-Bar)
+* Completely replace the vertical scrolling list of configurations with a structured view.
+* Within the selected model detail page, add a sleek internal "mini-bar" navigation for: [Architecture & Hypers] | [Dataset Preparation] | [Training Status].
+* Clicking these tabs switches the view content instantly.
+* **Redesign Active Training Dashboard:** When `isTraining` is TRUE, display a professional, animated "Active Backpropagation" visualization. We want a center-stage, CSS-based pulsating/glowing neural node above the real-time telemetry metrics (Loss, Epochs).
+
+### 4. Chat Studio Redesign (History Sidebar & Selectors)
+* **Layout:** Refactor `ChatView.tsx` into a proper layout: A sleek, slim left sidebar (56px) showing Chat History. The main chat canvas is centered on the right.
+* **Controls:** 1. Embed a "Model Selector" dropdown (displaying all persistent models in the `savedModelsLibrary`) adjacent to the bottom chat input bar.
+  2. Add a minimalist "Clear Chat" button near the input bar to reset the chat messages state for the active model.
+
+### 5. Final Aesthetic Direction
+The entire platform must use a strict dark mode, deep-black matte surfaces (`#000000` to `#121212`), structural hairlines (`border-white/5`), system fonts (San Francisco/Inter), and a single accent color (`#0A84FF` - Apple Blue).

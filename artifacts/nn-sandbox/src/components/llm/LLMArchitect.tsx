@@ -27,15 +27,6 @@ import { PAD_TOKEN, EOS_TOKEN } from "@/lib/textnet";
 
 export type Tokenization = "char" | "word";
 
-// Wall of <PAD> tokens injected between datasets so the model treats each one
-// as an independent document. Every <PAD> here is recognised by the tokenizer
-// as the single special padding id (not split character-by-character), so a
-// run of 50 of them gives the rolling context window enough room to fully
-// flush the previous topic before the next dataset starts — the previous
-// 20-PAD wall was leaking facts across documents (Seattle showing up under
-// London, etc.) once we started loading several Wikipedia summaries at once.
-// Newlines on either side keep the separator visually obvious in the corpus
-// textarea too.
 const DATASET_SEPARATOR = `\n${Array(50).fill(PAD_TOKEN).join(" ")}\n`;
 
 export interface LLMConfig {
@@ -49,9 +40,6 @@ export interface LLMConfig {
   systemPrompt: string;
 }
 
-// A single user-managed dataset row in the Dataset Manager. The `id` is a
-// UI-only handle (used as React key and for update/remove targeting); the
-// persisted shape in storage.ts intentionally omits it.
 export interface Dataset {
   id: number;
   name: string;
@@ -66,18 +54,14 @@ interface Props {
   paramCount: number;
   vocabSize: number;
   maxParams: number;
-  // Controlled dataset state. `datasets` is the SINGLE SOURCE OF TRUTH for the
-  // user's individual files; the flattened `config.corpus` string is derived
-  // FROM datasets (never the other way around) and pushed to the parent via
-  // `onChange`. Lifted to App.tsx so model loads can selectively restore the
-  // datasets array without ever overwriting it from a flattened corpus blob.
   datasets: Dataset[];
   onDatasetsChange: (next: Dataset[]) => void;
+  /** When provided, only the specified section is rendered. */
+  section?: "arch" | "dataset";
 }
 
 export const MAX_CORPUS_BYTES = 1_000_000;
 
-// Truncate a Wikipedia extract to the first N sentences.
 function truncateToSentences(text: string, n: number): string {
   const sentences = text.split(".").filter((s) => s.trim().length > 0);
   return sentences.slice(0, n).join(".").trim() + (sentences.length > 0 ? "." : "");
@@ -91,9 +75,7 @@ function Card({
   className?: string;
 }) {
   return (
-    <div
-      className={`bg-[#141414] rounded-2xl border border-white/[0.06] ${className}`}
-    >
+    <div className={`bg-[#101010] rounded-2xl border border-white/[0.06] ${className}`}>
       {children}
     </div>
   );
@@ -119,38 +101,16 @@ export function LLMArchitect({
   maxParams,
   datasets,
   onDatasetsChange,
+  section,
 }: Props) {
   const overBudget = paramCount > maxParams;
 
-  // Ref always reflects the latest config so effects don't capture stale values.
   const configRef = useRef(config);
-  useEffect(() => {
-    configRef.current = config;
-  });
+  useEffect(() => { configRef.current = config; });
   const onChangeRef = useRef(onChange);
-  useEffect(() => {
-    onChangeRef.current = onChange;
-  });
-
-  // Track the last combined corpus we pushed outward so we can avoid bouncing
-  // an unchanged value back into onChange every render. Note: this ref only
-  // serves as a write-side dedupe — datasets remain the source of truth and
-  // are NEVER reconstructed from `config.corpus`.
+  useEffect(() => { onChangeRef.current = onChange; });
   const lastCombinedRef = useRef<string | null>(null);
 
-  // Whenever datasets change, aggregate and push to parent. Two structural
-  // markers get physically injected into the corpus here:
-  //
-  // 1. <EOS> — appended to the END of every active dataset BEFORE the PAD
-  //    wall, so the model learns "when the factual paragraph finishes, emit
-  //    <EOS>". The inference loop in text.worker.ts watches for this token
-  //    and breaks immediately, killing infinite generation loops.
-  //
-  // 2. <PAD> wall — placed BETWEEN every active dataset and as a PREFIX to
-  //    the very first one, so each dataset reads as an independent document
-  //    instead of one giant continuous string. This stops cross-document
-  //    contamination — e.g. "Bot:" from dataset A flowing straight into the
-  //    first sentence of dataset B.
   useEffect(() => {
     const active = datasets
       .filter((d) => d.active)
@@ -168,38 +128,21 @@ export function LLMArchitect({
 
   const addDataset = (name: string, text: string) => {
     const trimmed = text.slice(0, MAX_CORPUS_BYTES);
-    onDatasetsChange([
-      ...datasets,
-      { id: genId(), name, text: trimmed, active: true },
-    ]);
+    onDatasetsChange([...datasets, { id: genId(), name, text: trimmed, active: true }]);
   };
 
   const updateDataset = (id: number, patch: Partial<Dataset>) => {
-    onDatasetsChange(
-      datasets.map((d) => (d.id === id ? { ...d, ...patch } : d)),
-    );
+    onDatasetsChange(datasets.map((d) => (d.id === id ? { ...d, ...patch } : d)));
   };
 
   const removeDataset = (id: number) => {
     onDatasetsChange(datasets.filter((d) => d.id !== id));
   };
 
-  // ── Text-file upload pipeline (shared) ────────────────────────────────────
-  // ONE transformer powers every .txt upload surface — the prominent drop zone
-  // AND the Bulk Text Formatter button — so behaviour is identical regardless
-  // of which the user reaches for. Raw prose is always split on blank lines
-  // and reshaped into User/Bot turns; the resulting dataset is named
-  // `Import: <filename>`. There is no longer a "raw dump" path: historically
-  // the drop zone wrote the file body straight into a dataset prefixed
-  // "Uploaded:", silently bypassing the formatter and producing corpora the
-  // model couldn't actually learn from.
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [uploadInfo, setUploadInfo] = useState<{
-    name: string;
-    paragraphs: number;
-  } | null>(null);
+  const [uploadInfo, setUploadInfo] = useState<{ name: string; paragraphs: number } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const processTextUpload = (file: File) => {
@@ -213,28 +156,15 @@ export function LLMArchitect({
     reader.onerror = () => setUploadError("Could not read that file.");
     reader.onload = (e) => {
       const rawText = (e.target?.result as string) ?? "";
-      // `\n\s*\n` matches a blank line that may contain trailing whitespace
-      // (Windows `\r\n\r\n`, soft-wrapped editors, etc.) — strictly broader
-      // than `\n\n+` so real-world `.txt` files split into paragraphs cleanly.
-      const paragraphs = rawText
-        .split(/\n\s*\n/)
-        .filter((p) => p.trim().length > 0);
+      const paragraphs = rawText.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
       if (paragraphs.length === 0) {
         setUploadError("No usable paragraphs found in that file.");
         return;
       }
-      // Per-paragraph bypass for pre-formatted instruction-tuning datasets:
-      // if the user has already structured a paragraph as a `User:` turn we
-      // pass it through verbatim. Anything else is raw prose, so we wrap it
-      // in the default `tell me more` prompt so the corpus still matches the
-      // Q&A shape the model is trained to chat in. Mixing both styles inside
-      // a single file is fine — each paragraph is decided independently.
       const formattedText = paragraphs
         .map((p) => {
           const trimmed = p.trim();
-          return trimmed.startsWith("User:")
-            ? trimmed
-            : `User: tell me more\nBot: ${trimmed}`;
+          return trimmed.startsWith("User:") ? trimmed : `User: tell me more\nBot: ${trimmed}`;
         })
         .join("\n\n");
       addDataset(`Import: ${file.name}`, formattedText);
@@ -243,20 +173,12 @@ export function LLMArchitect({
     reader.readAsText(file);
   };
 
-  // Wrapper for the hidden <input type="file"> onChange handlers. Pulls the
-  // first selected file, runs it through the shared transformer, then resets
-  // the input's value so re-selecting the same file still fires a fresh
-  // change event.
-  const handleFileInputChange = (
-    input: HTMLInputElement | null,
-    files: FileList | null,
-  ) => {
+  const handleFileInputChange = (input: HTMLInputElement | null, files: FileList | null) => {
     const f = files?.[0];
     if (f) processTextUpload(f);
     if (input) input.value = "";
   };
 
-  // ── Fact Teacher ──────────────────────────────────────────────────────────
   const [factQ, setFactQ] = useState("");
   const [factA, setFactA] = useState("");
 
@@ -277,11 +199,8 @@ export function LLMArchitect({
     setFactA("");
   };
 
-  // ── Wikipedia Knowledge Fetcher ───────────────────────────────────────────
   const [wikiTopic, setWikiTopic] = useState("");
-  const [wikiStatus, setWikiStatus] = useState<
-    "idle" | "loading" | "success" | "error"
-  >("idle");
+  const [wikiStatus, setWikiStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [wikiMsg, setWikiMsg] = useState("");
 
   const fetchWikipedia = async () => {
@@ -309,17 +228,7 @@ export function LLMArchitect({
         setWikiMsg("Wikipedia returned an empty summary for this topic.");
         return;
       }
-      // Smart truncation: keep only the first 3 sentences to prevent
-      // the model from looping over a very long context window.
       const extract = truncateToSentences(rawExtract, 3);
-      // One canonical phrasing per topic. The previous 3-variation expansion
-      // was tripling the same answer text into the corpus, which gave the
-      // MLP three near-identical training examples per topic and started
-      // bleeding facts across documents (Seattle answers showing up under
-      // London, etc.). The Intent Router on the read side already maps
-      // bare keywords like "denver" or "what is denver" onto this canonical
-      // "tell me about denver" prompt, so we don't need the data-side
-      // expansion to recover the recall.
       const text = `User: tell me about ${topic}\nBot: ${extract}`;
       addDataset(`Wiki: ${topic}`, text);
       setWikiStatus("success");
@@ -331,520 +240,338 @@ export function LLMArchitect({
     }
   };
 
-  // ── Derived values ────────────────────────────────────────────────────────
   const isWord = config.tokenization === "word";
   const tokenLabel = isWord ? "tokens" : "chars";
   const corpusBytes = new Blob([config.corpus]).size;
-  const totalDatasetBytes = datasets
-    .filter((d) => d.active)
-    .reduce((s, d) => s + new Blob([d.text]).size, 0);
+
+  const showArch = !section || section === "arch";
+  const showDataset = !section || section === "dataset";
 
   return (
     <div className="space-y-4">
-      {/* ── Architecture Card ─────────────────────────────────────────────── */}
-      <Card className="p-5 space-y-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Cpu className="size-4 text-sky-400" />
-            <span className="text-sm font-semibold text-white/88">
-              Tiny-LM Architecture
+
+      {/* ── Architecture Card ──────────────────────────────────────────────── */}
+      {showArch && (
+        <Card className="p-5 space-y-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Cpu className="size-4 text-[#0A84FF]" />
+              <span className="text-sm font-semibold text-white/88">Architecture</span>
+            </div>
+            <span className={`text-[11px] tabular-nums font-mono ${overBudget ? "text-red-400" : "text-white/30"}`}>
+              {paramCount.toLocaleString()} / {maxParams.toLocaleString()}
             </span>
           </div>
-          <span
-            className={`text-[11px] tabular-nums ${
-              overBudget ? "text-red-400" : "text-white/35"
+
+          {/* Tokenization */}
+          <div className="space-y-2">
+            <span className="text-[11px] text-white/35 font-medium">Tokenization</span>
+            <div className="grid grid-cols-2 gap-1 rounded-xl bg-[#0a0a0a] border border-white/[0.05] p-1">
+              <button
+                onClick={() => onChange({ ...config, tokenization: "char" })}
+                className={`h-9 rounded-lg text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 transition-all ${
+                  !isWord ? "bg-[#0A84FF]/15 text-[#0A84FF] border border-[#0A84FF]/20" : "text-white/30 hover:text-white/60"
+                }`}
+              >
+                <Type className="size-3.5" />
+                Char-Level
+              </button>
+              <button
+                onClick={() => onChange({ ...config, tokenization: "word" })}
+                className={`h-9 rounded-lg text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 transition-all ${
+                  isWord ? "bg-[#30D158]/10 text-[#30D158] border border-[#30D158]/20" : "text-white/30 hover:text-white/60"
+                }`}
+              >
+                <WholeWord className="size-3.5" />
+                Word-Level
+              </button>
+            </div>
+            <p className="text-[10px] text-white/22 leading-relaxed">
+              {isWord
+                ? "Vocabulary from whole words. Better for sentences, larger vocab."
+                : "Vocabulary from individual characters. Tiny vocab, learns spelling."}
+            </p>
+          </div>
+
+          {/* Context Window */}
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-[11px] text-white/35 font-medium">Context Window</span>
+              <span className="text-[11px] tabular-nums text-white/65 font-mono">{config.contextSize} {tokenLabel}</span>
+            </div>
+            <Slider min={1} max={20} step={1} value={[config.contextSize]} onValueChange={([v]) => onChange({ ...config, contextSize: v })} className="py-2" />
+          </div>
+
+          {/* Hidden Neurons */}
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-[11px] text-white/35 font-medium">Hidden Neurons</span>
+              <span className="text-[11px] tabular-nums text-white/65 font-mono">{config.hiddenSize}</span>
+            </div>
+            <Slider min={4} max={512} step={4} value={[config.hiddenSize]} onValueChange={([v]) => onChange({ ...config, hiddenSize: v })} className="py-2" />
+          </div>
+
+          {/* Learning Rate */}
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-[11px] text-white/35 font-medium">Learning Rate</span>
+              <span className="text-[11px] tabular-nums text-white/65 font-mono">{config.learningRate.toFixed(3)}</span>
+            </div>
+            <Slider min={0.005} max={0.5} step={0.005} value={[config.learningRate]} onValueChange={([v]) => onChange({ ...config, learningRate: v })} className="py-2" />
+          </div>
+
+          {/* Temperature */}
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-[11px] text-white/35 font-medium">Sampling Temperature</span>
+              <span className="text-[11px] tabular-nums text-white/65 font-mono">{config.temperature.toFixed(2)}</span>
+            </div>
+            <Slider min={0.1} max={1.5} step={0.05} value={[config.temperature]} onValueChange={([v]) => onChange({ ...config, temperature: v })} className="py-2" />
+            <p className="text-[10px] text-white/22 leading-relaxed">Lower = focused. Higher = creative.</p>
+          </div>
+
+          {/* Top-K */}
+          <div className="space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-[11px] text-white/35 font-medium inline-flex items-center gap-1.5">
+                <Filter className="size-3 text-fuchsia-400" />
+                Top-K Sampling
+              </span>
+              <span className="text-[11px] tabular-nums text-white/65 font-mono">{config.topK}</span>
+            </div>
+            <Slider min={1} max={40} step={1} value={[config.topK]} onValueChange={([v]) => onChange({ ...config, topK: v })} className="py-2" />
+          </div>
+
+          {/* System Prompt */}
+          <div className="space-y-2">
+            <span className="text-[11px] text-white/35 font-medium inline-flex items-center gap-1.5">
+              <MessageSquare className="size-3 text-sky-400" />
+              System Prompt
+            </span>
+            <input
+              type="text"
+              value={config.systemPrompt}
+              onChange={(e) => onChange({ ...config, systemPrompt: e.target.value })}
+              placeholder="Bot: I am a helpful AI."
+              className="w-full h-10 rounded-xl border border-white/[0.07] bg-[#0a0a0a] px-3 text-[11px] font-mono text-white/82 placeholder:text-white/18 focus:outline-none focus:border-[#0A84FF]/35 transition-colors"
+            />
+          </div>
+
+          {/* Badges */}
+          <div className="rounded-xl border border-white/[0.05] bg-[#0a0a0a] p-3 flex flex-wrap gap-1.5">
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20">vocab: {vocabSize.toLocaleString()}</span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-fuchsia-500/10 text-fuchsia-400 border border-fuchsia-500/20">{isWord ? "word-level" : "char-level"}</span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">softmax · cross-entropy</span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">pure TS · in-worker</span>
+          </div>
+
+          <button
+            onClick={onApply}
+            disabled={overBudget}
+            className="w-full h-10 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-[12px] font-semibold text-white/60 hover:text-white/90 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            <Sparkles className="size-3.5" />
+            Apply & Rebuild Model
+          </button>
+        </Card>
+      )}
+
+      {/* ── Training Corpus Card ───────────────────────────────────────────── */}
+      {showDataset && (
+        <Card className="p-5 space-y-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <BookOpen className="size-4 text-amber-400" />
+              <span className="text-sm font-semibold text-white/88">Training Corpus</span>
+            </div>
+            <span className="text-[10px] text-white/25 tabular-nums font-mono">
+              {formatBytes(corpusBytes)} / {formatBytes(MAX_CORPUS_BYTES)}
+            </span>
+          </div>
+
+          <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 flex gap-2.5">
+            <Lightbulb className="size-4 text-amber-300 shrink-0 mt-0.5" />
+            <div className="text-[11px] text-amber-100/80 leading-relaxed">
+              <span className="font-semibold text-amber-200">Pro tip:</span> Format as{" "}
+              <code className="mx-1 px-1.5 py-0.5 rounded bg-black/40 text-amber-200 font-mono text-[10px]">User: … Bot: …</code>
+              pairs for Q&A bots.
+            </div>
+          </div>
+
+          {/* Drop zone */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files?.[0]; if (f) processTextUpload(f); }}
+            onClick={() => fileInputRef.current?.click()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); } }}
+            className={`rounded-xl border-2 border-dashed p-4 text-center cursor-pointer transition-all select-none min-h-[90px] flex flex-col items-center justify-center gap-1.5 ${
+              dragOver ? "border-[#0A84FF]/50 bg-[#0A84FF]/5" : "border-white/[0.07] hover:border-white/[0.14] hover:bg-white/[0.02]"
             }`}
           >
-            {paramCount.toLocaleString()} / {maxParams.toLocaleString()} params
-          </span>
-        </div>
+            <Upload className="size-4 text-sky-400" />
+            <div className="text-[11px] font-semibold text-white/60">Drop a <code className="text-sky-400">.txt</code> file</div>
+            <div className="text-[10px] text-white/25">Paragraphs → User/Bot turns · max {formatBytes(MAX_CORPUS_BYTES)}</div>
+            <input ref={fileInputRef} type="file" accept=".txt,text/plain" className="hidden" onChange={(e) => handleFileInputChange(fileInputRef.current, e.target.files)} />
+          </div>
 
-        <div className="space-y-2">
-          <span className="text-xs text-white/35">Tokenization</span>
-          <div className="grid grid-cols-2 gap-1 rounded-xl bg-[#121212] border border-white/[0.07] p-1">
+          {uploadError && (
+            <div className="flex items-center gap-2 text-[11px] text-red-400 bg-red-400/8 border border-red-400/15 rounded-xl px-3 py-2">
+              <AlertCircle className="size-3.5 shrink-0" />
+              {uploadError}
+            </div>
+          )}
+          {uploadInfo && (
+            <div className="flex items-center gap-2 text-[11px] text-emerald-400 bg-emerald-400/8 border border-emerald-400/15 rounded-xl px-3 py-2">
+              <CheckCircle2 className="size-3.5 shrink-0" />
+              Added {uploadInfo.paragraphs} paragraphs from {uploadInfo.name}
+            </div>
+          )}
+
+          {/* Active Datasets */}
+          {datasets.length > 0 && (
+            <div className="space-y-1.5">
+              <span className="text-[11px] text-white/30 font-medium flex items-center gap-1.5">
+                <Database className="size-3" />
+                Active Datasets ({datasets.filter((d) => d.active).length}/{datasets.length})
+              </span>
+              {datasets.map((d) => (
+                <DatasetRow
+                  key={d.id}
+                  dataset={d}
+                  onToggle={() => updateDataset(d.id, { active: !d.active })}
+                  onRemove={() => removeDataset(d.id)}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Fact Teacher */}
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-2">
+              <GraduationCap className="size-4 text-sky-400" />
+              <span className="text-[11px] font-semibold text-white/65">Fact Teacher</span>
+            </div>
+            <input
+              type="text"
+              value={factQ}
+              onChange={(e) => setFactQ(e.target.value)}
+              placeholder="Question topic (e.g. the capital of France)"
+              className="w-full h-9 rounded-xl border border-white/[0.06] bg-[#0a0a0a] px-3 text-[11px] text-white/75 placeholder:text-white/18 focus:outline-none focus:border-[#0A84FF]/35 transition-colors"
+            />
+            <input
+              type="text"
+              value={factA}
+              onChange={(e) => setFactA(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addFactVariations(); }}
+              placeholder="Answer (e.g. Paris is the capital of France)"
+              className="w-full h-9 rounded-xl border border-white/[0.06] bg-[#0a0a0a] px-3 text-[11px] text-white/75 placeholder:text-white/18 focus:outline-none focus:border-[#0A84FF]/35 transition-colors"
+            />
             <button
-              onClick={() => onChange({ ...config, tokenization: "char" })}
-              className={`min-h-[40px] rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition ${
-                !isWord
-                  ? "bg-[#0A84FF]/15 text-[#0A84FF]"
-                  : "text-white/30 hover:text-white/60"
-              }`}
+              onClick={addFactVariations}
+              disabled={!factQ.trim() || !factA.trim()}
+              className="w-full h-9 rounded-xl bg-[#0A84FF]/10 hover:bg-[#0A84FF]/20 border border-[#0A84FF]/20 text-[#0A84FF] text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <Type className="size-3.5" />
-              Char-Level
+              <Plus className="size-3.5" />
+              Add Fact
             </button>
+          </div>
+
+          {/* Bulk formatter */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Hammer className="size-3.5 text-orange-400" />
+              <span className="text-[11px] font-semibold text-white/65">Bulk Text Formatter</span>
+            </div>
+            <p className="text-[10px] text-white/22 leading-relaxed">Upload any prose .txt — paragraphs are auto-converted into User/Bot turns.</p>
             <button
-              onClick={() => onChange({ ...config, tokenization: "word" })}
-              className={`min-h-[40px] rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition ${
-                isWord
-                  ? "bg-[#30D158]/12 text-[#30D158]"
-                  : "text-white/30 hover:text-white/60"
-              }`}
+              onClick={() => bulkFileInputRef.current?.click()}
+              className="w-full h-9 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.05] text-[11px] text-white/45 hover:text-white/70 font-medium flex items-center justify-center gap-2 transition-all"
             >
-              <WholeWord className="size-3.5" />
-              Word-Level
+              <FileCode2 className="size-3.5" />
+              Choose .txt file
             </button>
+            <input ref={bulkFileInputRef} type="file" accept=".txt,text/plain" className="hidden" onChange={(e) => handleFileInputChange(bulkFileInputRef.current, e.target.files)} />
           </div>
-          <p className="text-[10px] text-white/25">
-            {isWord
-              ? "Vocabulary is built from whole words and punctuation. Better for sentences, larger vocab."
-              : "Vocabulary is built from individual characters. Tiny vocab, learns spelling."}
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex justify-between">
-            <span className="text-xs text-white/35">Context Window</span>
-            <span className="text-xs tabular-nums text-white/75">
-              {config.contextSize} {tokenLabel}
-            </span>
-          </div>
-          <Slider
-            min={1}
-            max={20}
-            step={1}
-            value={[config.contextSize]}
-            onValueChange={([v]) => onChange({ ...config, contextSize: v })}
-            className="py-2"
-          />
-          <p className="text-[10px] text-white/25">
-            How many {tokenLabel} the model sees before predicting the next one.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex justify-between">
-            <span className="text-xs text-white/35">Hidden Neurons</span>
-            <span className="text-xs tabular-nums text-white/75">
-              {config.hiddenSize}
-            </span>
-          </div>
-          <Slider
-            min={4}
-            max={512}
-            step={4}
-            value={[config.hiddenSize]}
-            onValueChange={([v]) => onChange({ ...config, hiddenSize: v })}
-            className="py-2"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex justify-between">
-            <span className="text-xs text-white/35">Learning Rate</span>
-            <span className="text-xs tabular-nums text-white/75">
-              {config.learningRate.toFixed(3)}
-            </span>
-          </div>
-          <Slider
-            min={0.005}
-            max={0.5}
-            step={0.005}
-            value={[config.learningRate]}
-            onValueChange={([v]) => onChange({ ...config, learningRate: v })}
-            className="py-2"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex justify-between">
-            <span className="text-xs text-white/35">Sampling Temperature</span>
-            <span className="text-xs tabular-nums text-white/75">
-              {config.temperature.toFixed(2)}
-            </span>
-          </div>
-          <Slider
-            min={0.1}
-            max={1.5}
-            step={0.05}
-            value={[config.temperature]}
-            onValueChange={([v]) => onChange({ ...config, temperature: v })}
-            className="py-2"
-          />
-          <p className="text-[10px] text-white/25">
-            Lower = focused / repetitive. Higher = creative / chaotic.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex justify-between items-center">
-            <span className="text-xs text-white/35 inline-flex items-center gap-1.5">
-              <Filter className="size-3 text-fuchsia-300" />
-              Top-K Sampling
-            </span>
-            <span className="text-xs tabular-nums text-white/75">
-              {config.topK}
-            </span>
-          </div>
-          <Slider
-            min={1}
-            max={40}
-            step={1}
-            value={[config.topK]}
-            onValueChange={([v]) => onChange({ ...config, topK: v })}
-            className="py-2"
-          />
-          <p className="text-[10px] text-white/25">
-            Only the {config.topK} most-likely next tokens are considered.
-            Lower = safer & more on-topic.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <span className="text-xs text-white/35 inline-flex items-center gap-1.5">
-            <MessageSquare className="size-3 text-sky-300" />
-            System Prompt
-          </span>
-          <input
-            type="text"
-            value={config.systemPrompt}
-            onChange={(e) =>
-              onChange({ ...config, systemPrompt: e.target.value })
-            }
-            placeholder="Bot: I am a helpful AI."
-            className="w-full min-h-[40px] rounded-xl border border-white/[0.07] bg-[#111111] px-3 py-2 text-xs font-mono text-white/88 placeholder:text-white/20 focus:outline-none focus:border-[#0A84FF]/40 transition-colors"
-          />
-          <p className="text-[10px] text-white/25">
-            Invisibly prepended to every chat prompt to lock the bot's persona.
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-white/[0.07] bg-[#111111] p-3 flex flex-wrap gap-1.5">
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-300 border border-sky-500/30">
-            vocab: {vocabSize.toLocaleString()}
-          </span>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-fuchsia-500/10 text-fuchsia-300 border border-fuchsia-500/30">
-            {isWord ? "word-level" : "char-level"}
-          </span>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
-            softmax · cross-entropy
-          </span>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/30">
-            pure TS · in-worker
-          </span>
-        </div>
-      </Card>
-
-      {/* ── Training Corpus Card ──────────────────────────────────────────── */}
-      <Card className="p-5 space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <BookOpen className="size-4 text-amber-400" />
-            <span className="text-sm font-semibold text-white/88">
-              Training Corpus
-            </span>
-          </div>
-          <span className="text-[10px] text-white/25 tabular-nums">
-            {formatBytes(corpusBytes)} / {formatBytes(MAX_CORPUS_BYTES)}
-          </span>
-        </div>
-
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 flex gap-2.5">
-          <Lightbulb className="size-4 text-amber-300 shrink-0 mt-0.5" />
-          <div className="text-[11px] text-amber-100/90 leading-relaxed">
-            <span className="font-semibold text-amber-200">Pro tip:</span> To
-            train a Q&A bot, upload a text file formatted as
-            <code className="mx-1 px-1.5 py-0.5 rounded bg-slate-900/80 text-amber-200 font-mono text-[10px]">
-              User: question Bot: answer
-            </code>
-            with one pair per line.
-          </div>
-        </div>
-
-        {/* .txt drop zone — shares the processTextUpload pipeline with the
-            Bulk Text Formatter button below, so any file dropped here is
-            auto-split into paragraphs and reshaped into User/Bot turns. */}
-        <div
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragOver(false);
-            const f = e.dataTransfer.files?.[0];
-            if (f) processTextUpload(f);
-          }}
-          onClick={() => fileInputRef.current?.click()}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); } }}
-          className={`rounded-xl border-2 border-dashed p-4 text-center cursor-pointer transition select-none min-h-[100px] flex flex-col items-center justify-center gap-1.5 ${
-            dragOver
-              ? "border-sky-400 bg-sky-500/10"
-              : "border-white/[0.07] hover:border-white/[0.14] hover:bg-white/[0.02]"
-          }`}
-        >
-          <Upload className="size-5 text-sky-300" />
-          <div className="text-xs font-semibold text-white/75">
-            Drop a <code className="text-sky-300">.txt</code> file here
-          </div>
-          <div className="text-[10px] text-white/25">
-            Paragraphs become <code className="font-mono">User:/Bot:</code> turns · max {formatBytes(MAX_CORPUS_BYTES)}
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".txt,text/plain"
-            className="hidden"
-            onChange={(e) => handleFileInputChange(fileInputRef.current, e.target.files)}
-          />
-        </div>
-
-        {uploadInfo && (
-          <div className="flex items-start gap-1.5 text-[10px] text-emerald-300">
-            <CheckCircle2 className="size-3.5 shrink-0 mt-0.5" />
-            <span>
-              <span className="font-semibold">{uploadInfo.name}</span>{" "}
-              — {uploadInfo.paragraphs} paragraph
-              {uploadInfo.paragraphs !== 1 ? "s" : ""} formatted and added as a dataset.
-            </span>
-          </div>
-        )}
-
-        {uploadError && (
-          <div className="flex items-start gap-1.5 text-[10px] text-rose-300">
-            <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
-            {uploadError}
-          </div>
-        )}
-
-        {/* Fact Teacher */}
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2.5">
-          <div className="flex items-center gap-2">
-            <GraduationCap className="size-4 text-emerald-300" />
-            <span className="text-xs font-semibold text-emerald-100">Fact Teacher</span>
-          </div>
-          <p className="text-[10px] text-emerald-100/70 leading-relaxed">
-            Teach the bot one fact in 5 phrasings — added as a new dataset.
-          </p>
-          <input
-            type="text"
-            value={factQ}
-            onChange={(e) => setFactQ(e.target.value)}
-            placeholder="Question (e.g. the capital of France)"
-            className="w-full min-h-[36px] rounded-lg border border-white/[0.07] bg-[#121212] px-2.5 py-1.5 text-xs font-mono text-white/88 placeholder:text-white/20 focus:outline-none focus:border-[#30D158]/40 transition-colors"
-          />
-          <input
-            type="text"
-            value={factA}
-            onChange={(e) => setFactA(e.target.value)}
-            placeholder="Answer (e.g. Paris)"
-            onKeyDown={(e) => { if (e.key === "Enter") addFactVariations(); }}
-            className="w-full min-h-[36px] rounded-lg border border-white/[0.07] bg-[#121212] px-2.5 py-1.5 text-xs font-mono text-white/88 placeholder:text-white/20 focus:outline-none focus:border-[#30D158]/40 transition-colors"
-          />
-          <button
-            type="button"
-            onClick={addFactVariations}
-            disabled={!factQ.trim() || !factA.trim()}
-            className="w-full min-h-[38px] rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-100 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Plus className="size-3.5" />
-            Add Fact Variations
-          </button>
-        </div>
-
-        {/* Data Forge */}
-        <div className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-3 space-y-4">
-          <div className="flex items-center gap-2">
-            <Hammer className="size-4 text-violet-300" />
-            <span className="text-xs font-semibold text-violet-100">Data Forge</span>
-          </div>
-          <p className="text-[10px] text-violet-100/70 leading-relaxed">
-            Each tool creates a new dataset entry in the library below.
-          </p>
 
           {/* Wikipedia */}
           <div className="space-y-2">
-            <div className="flex items-center gap-1.5">
-              <Globe className="size-3.5 text-sky-300" />
-              <span className="text-[11px] font-semibold text-white/75">
-                Wikipedia Knowledge Fetcher
-              </span>
-              <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/25">
-                3-sentence summary
-              </span>
+            <div className="flex items-center gap-2">
+              <Globe className="size-3.5 text-emerald-400" />
+              <span className="text-[11px] font-semibold text-white/65">Wikipedia Knowledge</span>
             </div>
-            <p className="text-[10px] text-white/25">
-              Fetches a concise Wikipedia summary and creates a{" "}
-              <code className="font-mono">User:/Bot:</code> dataset entry.
-            </p>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={wikiTopic}
-                onChange={(e) => { setWikiTopic(e.target.value); setWikiStatus("idle"); setWikiMsg(""); }}
+                onChange={(e) => setWikiTopic(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") fetchWikipedia(); }}
-                placeholder="Topic (e.g. Quantum Mechanics)"
-                className="flex-1 min-h-[36px] rounded-lg border border-white/[0.07] bg-[#121212] px-2.5 py-1.5 text-xs font-mono text-white/88 placeholder:text-white/20 focus:outline-none focus:border-[#0A84FF]/40 transition-colors"
+                placeholder="Topic (e.g. Black holes)"
+                className="flex-1 h-9 rounded-xl border border-white/[0.06] bg-[#0a0a0a] px-3 text-[11px] text-white/75 placeholder:text-white/18 focus:outline-none focus:border-[#0A84FF]/35 transition-colors"
               />
               <button
-                type="button"
                 onClick={fetchWikipedia}
                 disabled={!wikiTopic.trim() || wikiStatus === "loading"}
-                className="min-h-[36px] px-3 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-sky-100 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                className="h-9 px-4 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 text-[11px] font-semibold flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
               >
                 {wikiStatus === "loading" ? <Loader2 className="size-3.5 animate-spin" /> : <Globe className="size-3.5" />}
-                {wikiStatus === "loading" ? "Fetching…" : "Fetch & Learn"}
+                Fetch
               </button>
             </div>
-            {wikiStatus === "success" && (
-              <div className="flex items-start gap-1.5 text-[10px] text-emerald-300">
-                <CheckCircle2 className="size-3.5 shrink-0 mt-0.5" />
+            {wikiMsg && (
+              <div className={`flex items-center gap-2 text-[10px] rounded-xl px-3 py-2 border ${
+                wikiStatus === "error"
+                  ? "text-red-400 bg-red-400/8 border-red-400/15"
+                  : "text-emerald-400 bg-emerald-400/8 border-emerald-400/15"
+              }`}>
+                {wikiStatus === "error" ? <AlertCircle className="size-3 shrink-0" /> : <CheckCircle2 className="size-3 shrink-0" />}
                 {wikiMsg}
               </div>
             )}
-            {wikiStatus === "error" && (
-              <div className="flex items-start gap-1.5 text-[10px] text-rose-300">
-                <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
-                {wikiMsg}
-              </div>
-            )}
           </div>
+        </Card>
+      )}
+    </div>
+  );
+}
 
-          <div className="border-t border-violet-500/20" />
+function DatasetRow({
+  dataset,
+  onToggle,
+  onRemove,
+}: {
+  dataset: Dataset;
+  onToggle: () => void;
+  onRemove: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const bytes = new Blob([dataset.text]).size;
 
-          {/* Bulk Text Formatter */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-1.5">
-              <FileCode2 className="size-3.5 text-fuchsia-300" />
-              <span className="text-[11px] font-semibold text-white/75">
-                Bulk Text Formatter
-              </span>
-            </div>
-            <p className="text-[10px] text-white/25">
-              Upload a raw <code className="font-mono">.txt</code> file.
-              Paragraphs are wrapped in alternating{" "}
-              <code className="font-mono">User:/Bot:</code> turns and saved as a new dataset.
-            </p>
-            <button
-              type="button"
-              onClick={() => bulkFileInputRef.current?.click()}
-              className="w-full min-h-[38px] rounded-lg bg-fuchsia-500/20 hover:bg-fuchsia-500/30 border border-fuchsia-400/40 text-fuchsia-100 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition"
-            >
-              <FileCode2 className="size-3.5" />
-              Upload Raw Text File
-            </button>
-            <input
-              ref={bulkFileInputRef}
-              type="file"
-              accept=".txt,text/plain"
-              className="hidden"
-              onChange={(e) => handleFileInputChange(bulkFileInputRef.current, e.target.files)}
-            />
-            {uploadInfo && (
-              <div className="flex items-start gap-1.5 text-[10px] text-emerald-300">
-                <CheckCircle2 className="size-3.5 shrink-0 mt-0.5" />
-                <span>
-                  <span className="font-semibold">{uploadInfo.name}</span>{" "}
-                  — {uploadInfo.paragraphs} paragraph
-                  {uploadInfo.paragraphs !== 1 ? "s" : ""} formatted and added as a dataset.
-                </span>
-              </div>
-            )}
-            {uploadError && (
-              <div className="flex items-start gap-1.5 text-[10px] text-rose-300">
-                <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
-                {uploadError}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* ── Dataset Manager ───────────────────────────────────────────────── */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5">
-              <Database className="size-3.5 text-sky-300" />
-              <span className="text-xs font-semibold text-white/75">
-                Corpus Library
-              </span>
-              <span className="text-[10px] text-white/25 tabular-nums">
-                ({datasets.filter((d) => d.active).length}/{datasets.length} active · {formatBytes(totalDatasetBytes)})
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => addDataset("New Dataset", "")}
-              className="min-h-[28px] px-2.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.07] text-white/40 text-[11px] font-semibold inline-flex items-center gap-1 transition"
-            >
-              <Plus className="size-3" />
-              Add
-            </button>
-          </div>
-
-          <div className="space-y-2">
-            {datasets.map((ds) => (
-              <div
-                key={ds.id}
-                className={`rounded-xl border transition ${
-                  ds.active
-                    ? "border-white/[0.08] bg-[#111111]"
-                    : "border-white/[0.04] bg-[#0d0d0d] opacity-60"
-                }`}
-              >
-                {/* Dataset header */}
-                <div className="flex items-center gap-2 px-3 py-2 border-b border-white/[0.04]">
-                  <div
-                    className={`size-2 rounded-full shrink-0 ${
-                      ds.active ? "bg-emerald-400" : "bg-slate-600"
-                    }`}
-                  />
-                  <input
-                    type="text"
-                    value={ds.name}
-                    onChange={(e) => updateDataset(ds.id, { name: e.target.value })}
-                    className="flex-1 min-w-0 bg-transparent text-[11px] font-semibold text-white/75 placeholder:text-white/20 focus:outline-none"
-                    placeholder="Dataset name"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => updateDataset(ds.id, { active: !ds.active })}
-                    title={ds.active ? "Deactivate" : "Activate"}
-                    className={`shrink-0 size-6 rounded-md flex items-center justify-center transition ${
-                      ds.active
-                        ? "text-emerald-300 hover:bg-emerald-500/20"
-                        : "text-white/25 hover:bg-slate-700"
-                    }`}
-                  >
-                    {ds.active ? (
-                      <Eye className="size-3.5" />
-                    ) : (
-                      <EyeOff className="size-3.5" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => removeDataset(ds.id)}
-                    title="Delete dataset"
-                    className="shrink-0 size-6 rounded-md flex items-center justify-center text-white/25 hover:text-rose-400 hover:bg-rose-500/10 transition"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </div>
-                {/* Dataset text */}
-                <textarea
-                  value={ds.text}
-                  onChange={(e) => {
-                    const v = e.target.value.slice(0, MAX_CORPUS_BYTES);
-                    updateDataset(ds.id, { text: v });
-                  }}
-                  rows={4}
-                  placeholder="Paste or type corpus text here…"
-                  className="w-full rounded-b-xl bg-transparent px-3 py-2 text-[11px] font-mono text-white/60 placeholder:text-white/15 focus:outline-none resize-none"
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-
+  return (
+    <div className={`rounded-xl border transition-colors ${dataset.active ? "border-white/[0.07] bg-[#0f0f0f]" : "border-white/[0.04] bg-[#0a0a0a] opacity-50"}`}>
+      <div className="flex items-center gap-2 px-3 py-2.5">
         <button
-          onClick={onApply}
-          disabled={overBudget || config.corpus.trim().length < 8}
-          className="w-full min-h-[44px] rounded-xl bg-[#0A84FF] hover:bg-[#409CFF] text-white font-semibold text-sm flex items-center justify-center gap-1.5 transition disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <Sparkles className="size-4" />
-          Rebuild Model
+          onClick={onToggle}
+          className={`size-3.5 rounded-full border-2 shrink-0 transition-all ${dataset.active ? "border-[#0A84FF] bg-[#0A84FF]" : "border-white/20 bg-transparent"}`}
+        />
+        <span className="flex-1 text-[11px] text-white/65 font-medium truncate">{dataset.name}</span>
+        <span className="text-[9px] text-white/25 tabular-nums font-mono shrink-0">{formatBytes(bytes)}</span>
+        <button onClick={() => setExpanded(!expanded)} className="size-5 flex items-center justify-center text-white/20 hover:text-white/50 transition-colors shrink-0">
+          {expanded ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
         </button>
-      </Card>
+        <button onClick={onRemove} className="size-5 flex items-center justify-center text-white/15 hover:text-red-400 transition-colors shrink-0">
+          <Trash2 className="size-3" />
+        </button>
+      </div>
+      {expanded && (
+        <div className="px-3 pb-3">
+          <pre className="text-[9px] font-mono text-white/30 whitespace-pre-wrap leading-relaxed max-h-28 overflow-y-auto bg-black/30 rounded-lg p-2">
+            {dataset.text.slice(0, 800)}{dataset.text.length > 800 ? "\n…" : ""}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }
