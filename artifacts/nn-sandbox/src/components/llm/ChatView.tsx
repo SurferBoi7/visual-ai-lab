@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Send, Bot, User, Loader2, Sparkles, Wand2, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+}
+
+export interface ModelOption {
+  id: string;
+  label: string;
 }
 
 interface Props {
@@ -19,6 +23,8 @@ interface Props {
   epoch: number;
   loss: number;
   isTraining: boolean;
+  modelOptions?: ModelOption[];
+  onSelectModel?: (id: string) => void;
 }
 
 export function ChatView({
@@ -32,6 +38,8 @@ export function ChatView({
   epoch,
   loss,
   isTraining,
+  modelOptions,
+  onSelectModel,
 }: Props) {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -66,130 +74,134 @@ export function ChatView({
   };
 
   return (
-    <div className="rounded-2xl border border-slate-700 bg-slate-800/50 backdrop-blur-md flex flex-col h-[calc(100vh-220px)] md:h-[600px] overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700/80 bg-slate-900/40">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="size-8 rounded-lg bg-gradient-to-br from-sky-500/30 to-emerald-500/30 border border-sky-400/30 flex items-center justify-center shrink-0">
-            <Bot className="size-4 text-sky-300" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-slate-100 truncate">
-              {modelLabel}
-            </div>
-            <div className="text-[11px] text-slate-400 truncate tabular-nums">
-              epoch {epoch} · loss {loss.toFixed(3)}
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {messages.length > 0 && (
-            <button
-              onClick={() => setMessages([])}
-              className="flex items-center gap-1 text-[11px] text-apple-mid hover:text-red-400 transition-colors px-2 py-1 rounded-lg hover:bg-red-500/10"
-              aria-label="Clear chat"
-            >
-              <Trash2 className="size-3" />
-              Clear
-            </button>
-          )}
-          <span
-            className={`text-[10px] px-2 py-0.5 rounded-full border ${
-              isTraining
-                ? "bg-sky-500/15 text-sky-300 border-sky-500/30 animate-pulse"
-                : "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
-            }`}
-          >
-            {isTraining ? "training…" : "idle"}
-          </span>
-        </div>
-      </div>
+    <div className="h-full flex flex-col bg-[#080808] overflow-hidden">
 
-      {/* Live generation banner */}
-      <div className="px-4 py-2.5 border-b border-slate-700/60 bg-slate-950/40">
-        <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-500 mb-1">
-          <Wand2 className="size-3 text-amber-400" />
-          Live Generation
+      {/* Live generation ticker */}
+      {liveSample && (
+        <div className="shrink-0 px-5 py-2 border-b border-white/[0.04] flex items-center gap-2.5 overflow-hidden">
+          <span className="size-1.5 rounded-full bg-[#30D158] shrink-0 animate-pulse" />
+          <Wand2 className="size-3 text-white/20 shrink-0" />
+          <code className="text-[10px] font-mono text-[#30D158]/55 truncate leading-tight">
+            {liveSample}
+          </code>
         </div>
-        <div className="font-mono text-[11px] text-emerald-200/90 leading-relaxed break-words min-h-[28px] whitespace-pre-wrap">
-          {liveSample || (
-            <span className="text-slate-600">
-              start training to see the model dream…
-            </span>
-          )}
-        </div>
-      </div>
+      )}
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 && (
-          <div className="h-full flex flex-col items-center justify-center text-center px-6 py-10">
-            <div className="size-12 rounded-2xl bg-gradient-to-br from-sky-500/20 to-emerald-500/20 border border-slate-700 flex items-center justify-center mb-3">
-              <Sparkles className="size-5 text-sky-300" />
+      {/* Messages thread */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+
+        {/* Empty state */}
+        {messages.length === 0 && !loading && (
+          <div className="h-full flex flex-col items-center justify-center pb-16 px-8">
+            <div className="size-16 rounded-2xl bg-[#141414] border border-white/[0.06] flex items-center justify-center mb-5">
+              <Sparkles className="size-7 text-[#0A84FF]/50" />
             </div>
-            <div className="text-sm font-semibold text-slate-100">
-              Train, then chat
+            <div className="text-[15px] font-semibold text-white/60 text-center mb-2">
+              {epoch > 0 ? "Ready to chat" : "Train first"}
             </div>
-            <div className="text-xs text-slate-400 mt-1 max-w-xs">
-              Hit <span className="text-sky-300 font-semibold">Train</span> to
-              fit the model on your corpus, then send a prompt — the network
-              continues your text character by character.
+            <div className="text-[12px] text-white/22 text-center max-w-[260px] leading-relaxed">
+              {epoch > 0
+                ? `${modelLabel} — send a message and the model will continue your text.`
+                : "Head to Training Lab, press Train, then come back here to converse."}
             </div>
           </div>
         )}
 
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            className={`flex gap-2.5 ${m.role === "user" ? "flex-row-reverse" : ""}`}
-          >
+        <div className="px-4 py-4 space-y-4">
+          {messages.map((m) => (
             <div
-              className={`size-8 rounded-lg flex items-center justify-center shrink-0 ${
-                m.role === "user"
-                  ? "bg-sky-500/20 border border-sky-400/30"
-                  : "bg-slate-700/60 border border-slate-600"
-              }`}
+              key={m.id}
+              className={`flex gap-3 ${m.role === "user" ? "flex-row-reverse" : ""}`}
             >
-              {m.role === "user" ? (
-                <User className="size-4 text-sky-300" />
-              ) : (
-                <Bot className="size-4 text-slate-200" />
-              )}
-            </div>
-            <div className={`max-w-[78%]`}>
+              {/* Avatar */}
               <div
-                className={`rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed font-mono ${
+                className={`size-7 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
                   m.role === "user"
-                    ? "bg-sky-500/15 border border-sky-400/30 text-sky-50 rounded-tr-sm"
-                    : "bg-slate-900/70 border border-slate-700 text-slate-100 rounded-tl-sm"
+                    ? "bg-[#0A84FF]/12 border border-[#0A84FF]/18"
+                    : "bg-white/[0.04] border border-white/[0.07]"
+                }`}
+              >
+                {m.role === "user" ? (
+                  <User className="size-3.5 text-[#0A84FF]" />
+                ) : (
+                  <Bot className="size-3.5 text-white/40" />
+                )}
+              </div>
+              {/* Bubble */}
+              <div
+                className={`max-w-[82%] rounded-2xl px-4 py-2.5 text-[13px] leading-relaxed font-mono ${
+                  m.role === "user"
+                    ? "bg-[#0A84FF]/10 border border-[#0A84FF]/18 text-white/88 rounded-tr-sm"
+                    : "bg-[#141414] border border-white/[0.06] text-white/75 rounded-tl-sm"
                 }`}
               >
                 {m.content}
               </div>
             </div>
-          </div>
-        ))}
+          ))}
 
-        {loading && (
-          <div className="flex gap-2.5">
-            <div className="size-8 rounded-lg bg-slate-700/60 border border-slate-600 flex items-center justify-center">
-              <Bot className="size-4 text-slate-200" />
+          {loading && (
+            <div className="flex gap-3">
+              <div className="size-7 rounded-xl bg-white/[0.04] border border-white/[0.07] flex items-center justify-center shrink-0 mt-0.5">
+                <Bot className="size-3.5 text-white/40" />
+              </div>
+              <div className="rounded-2xl rounded-tl-sm px-4 py-3 bg-[#141414] border border-white/[0.06] flex gap-1.5 items-center">
+                <span className="size-1.5 rounded-full bg-white/25 animate-pulse" />
+                <span
+                  className="size-1.5 rounded-full bg-white/25 animate-pulse"
+                  style={{ animationDelay: "180ms" }}
+                />
+                <span
+                  className="size-1.5 rounded-full bg-white/25 animate-pulse"
+                  style={{ animationDelay: "360ms" }}
+                />
+              </div>
             </div>
-            <div className="rounded-2xl rounded-tl-sm px-3.5 py-3 bg-slate-900/70 border border-slate-700 flex gap-1">
-              <span className="size-1.5 rounded-full bg-slate-400 animate-pulse" />
-              <span
-                className="size-1.5 rounded-full bg-slate-400 animate-pulse"
-                style={{ animationDelay: "150ms" }}
-              />
-              <span
-                className="size-1.5 rounded-full bg-slate-400 animate-pulse"
-                style={{ animationDelay: "300ms" }}
-              />
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      <div className="border-t border-slate-700/80 bg-slate-900/40 p-3">
-        <div className="flex items-end gap-2">
+      {/* Input bar */}
+      <div className="shrink-0 px-3 pb-3 pt-2 bg-[#080808]">
+        <div
+          className={`flex items-end bg-[#111111] rounded-2xl border transition-colors ${
+            isTraining
+              ? "border-[#0A84FF]/18"
+              : "border-white/[0.07] focus-within:border-white/[0.13]"
+          }`}
+        >
+          {/* Model selector */}
+          <div className="flex items-center pl-3 py-3 shrink-0">
+            {modelOptions && modelOptions.length > 0 ? (
+              <>
+                <select
+                  className="bg-transparent text-[10px] font-mono text-white/22 hover:text-white/50 focus:outline-none cursor-pointer max-w-[110px] leading-none"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val && onSelectModel) onSelectModel(val);
+                    e.target.value = "";
+                  }}
+                  defaultValue=""
+                >
+                  <option value="" disabled className="bg-[#1a1a1a] text-white/50">
+                    load model
+                  </option>
+                  {modelOptions.map((o) => (
+                    <option
+                      key={o.id}
+                      value={o.id}
+                      className="bg-[#1a1a1a] text-white/80"
+                    >
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <div className="w-px h-3 bg-white/[0.08] mx-2.5 shrink-0" />
+              </>
+            ) : null}
+          </div>
+
+          {/* Textarea */}
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -200,20 +212,51 @@ export function ChatView({
               }
             }}
             rows={1}
-            placeholder="Type a prompt — the model continues it…"
-            className="flex-1 min-h-[44px] max-h-32 rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40 resize-none font-mono"
+            placeholder={
+              isTraining
+                ? "Model is training — you can still send…"
+                : "Send a message…"
+            }
+            className="flex-1 bg-transparent py-3 text-[13px] font-mono text-white/82 placeholder:text-white/18 focus:outline-none resize-none leading-relaxed min-h-[20px] max-h-28 pl-0 pr-0"
           />
-          <Button
-            onClick={send}
-            disabled={!input.trim() || loading}
-            className="min-h-[44px] min-w-[44px] rounded-xl gap-1.5"
-          >
-            {loading ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Send className="size-4" />
+
+          {/* Send button */}
+          <div className="px-2 py-2 shrink-0">
+            <button
+              onClick={send}
+              disabled={!input.trim() || loading}
+              className={`size-8 rounded-xl flex items-center justify-center transition-all ${
+                input.trim() && !loading
+                  ? "bg-[#0A84FF] text-white hover:bg-[#409CFF] shadow-[0_0_16px_rgba(10,132,255,0.3)]"
+                  : "bg-white/[0.04] text-white/18"
+              }`}
+            >
+              {loading ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Send className="size-3.5" />
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Status strip */}
+        <div className="flex items-center justify-between px-1.5 mt-1.5">
+          <div className="text-[10px] text-white/14 font-mono tabular-nums">
+            {epoch > 0 ? `ep ${epoch} · loss ${loss.toFixed(4)}` : "untrained"}
+            {isTraining && (
+              <span className="text-[#0A84FF]/50 ml-1.5">· training…</span>
             )}
-          </Button>
+          </div>
+          {messages.length > 0 && (
+            <button
+              onClick={() => setMessages([])}
+              className="text-[10px] text-white/14 hover:text-red-400/60 transition-colors flex items-center gap-1"
+            >
+              <Trash2 className="size-2.5" />
+              clear
+            </button>
+          )}
         </div>
       </div>
     </div>

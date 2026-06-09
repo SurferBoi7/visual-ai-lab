@@ -92,7 +92,7 @@ function Card({
 }) {
   return (
     <div
-      className={`bg-apple-card/40 rounded-2xl border border-apple-divider/10 backdrop-blur-md ${className}`}
+      className={`bg-[#141414] rounded-2xl border border-white/[0.06] ${className}`}
     >
       {children}
     </div>
@@ -346,13 +346,13 @@ export function LLMArchitect({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Cpu className="size-4 text-sky-400" />
-            <span className="text-sm font-semibold text-slate-100">
+            <span className="text-sm font-semibold text-white/88">
               Tiny-LM Architecture
             </span>
           </div>
           <span
             className={`text-[11px] tabular-nums ${
-              overBudget ? "text-red-400" : "text-slate-400"
+              overBudget ? "text-red-400" : "text-white/35"
             }`}
           >
             {paramCount.toLocaleString()} / {maxParams.toLocaleString()} params
@@ -360,14 +360,14 @@ export function LLMArchitect({
         </div>
 
         <div className="space-y-2">
-          <span className="text-xs text-slate-400">Tokenization</span>
-          <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-950/60 border border-slate-700 p-1">
+          <span className="text-xs text-white/35">Tokenization</span>
+          <div className="grid grid-cols-2 gap-1 rounded-xl bg-[#121212] border border-white/[0.07] p-1">
             <button
               onClick={() => onChange({ ...config, tokenization: "char" })}
               className={`min-h-[40px] rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition ${
                 !isWord
-                  ? "bg-sky-500/20 text-sky-200 shadow-inner"
-                  : "text-slate-400 hover:text-slate-200"
+                  ? "bg-[#0A84FF]/15 text-[#0A84FF]"
+                  : "text-white/30 hover:text-white/60"
               }`}
             >
               <Type className="size-3.5" />
@@ -377,15 +377,15 @@ export function LLMArchitect({
               onClick={() => onChange({ ...config, tokenization: "word" })}
               className={`min-h-[40px] rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition ${
                 isWord
-                  ? "bg-emerald-500/20 text-emerald-200 shadow-inner"
-                  : "text-slate-400 hover:text-slate-200"
+                  ? "bg-[#30D158]/12 text-[#30D158]"
+                  : "text-white/30 hover:text-white/60"
               }`}
             >
               <WholeWord className="size-3.5" />
               Word-Level
             </button>
           </div>
-          <p className="text-[10px] text-slate-500">
+          <p className="text-[10px] text-white/25">
             {isWord
               ? "Vocabulary is built from whole words and punctuation. Better for sentences, larger vocab."
               : "Vocabulary is built from individual characters. Tiny vocab, learns spelling."}
@@ -394,8 +394,8 @@ export function LLMArchitect({
 
         <div className="space-y-2">
           <div className="flex justify-between">
-            <span className="text-xs text-slate-400">Context Window</span>
-            <span className="text-xs tabular-nums text-slate-200">
+            <span className="text-xs text-white/35">Context Window</span>
+            <span className="text-xs tabular-nums text-white/75">
               {config.contextSize} {tokenLabel}
             </span>
           </div>
@@ -407,15 +407,15 @@ export function LLMArchitect({
             onValueChange={([v]) => onChange({ ...config, contextSize: v })}
             className="py-2"
           />
-          <p className="text-[10px] text-slate-500">
+          <p className="text-[10px] text-white/25">
             How many {tokenLabel} the model sees before predicting the next one.
           </p>
         </div>
 
         <div className="space-y-2">
           <div className="flex justify-between">
-            <span className="text-xs text-slate-400">Hidden Neurons</span>
-            <span className="text-xs tabular-nums text-slate-200">
+            <span className="text-xs text-white/35">Hidden Neurons</span>
+            <span className="text-xs tabular-nums text-white/75">
               {config.hiddenSize}
             </span>
           </div>
@@ -431,8 +431,8 @@ export function LLMArchitect({
 
         <div className="space-y-2">
           <div className="flex justify-between">
-            <span className="text-xs text-slate-400">Learning Rate</span>
-            <span className="text-xs tabular-nums text-slate-200">
+            <span className="text-xs text-white/35">Learning Rate</span>
+            <span className="text-xs tabular-nums text-white/75">
               {config.learningRate.toFixed(3)}
             </span>
           </div>
@@ -448,8 +448,8 @@ export function LLMArchitect({
 
         <div className="space-y-2">
           <div className="flex justify-between">
-            <span className="text-xs text-slate-400">Sampling Temperature</span>
-            <span className="text-xs tabular-nums text-slate-200">
+            <span className="text-xs text-white/35">Sampling Temperature</span>
+            <span className="text-xs tabular-nums text-white/75">
               {config.temperature.toFixed(2)}
             </span>
           </div>
@@ -461,18 +461,18 @@ export function LLMArchitect({
             onValueChange={([v]) => onChange({ ...config, temperature: v })}
             className="py-2"
           />
-          <p className="text-[10px] text-slate-500">
+          <p className="text-[10px] text-white/25">
             Lower = focused / repetitive. Higher = creative / chaotic.
           </p>
         </div>
 
         <div className="space-y-2">
           <div className="flex justify-between items-center">
-            <span className="text-xs text-slate-400 inline-flex items-center gap-1.5">
+            <span className="text-xs text-white/35 inline-flex items-center gap-1.5">
               <Filter className="size-3 text-fuchsia-300" />
               Top-K Sampling
             </span>
-            <span className="text-xs tabular-nums text-slate-200">
+            <span className="text-xs tabular-nums text-white/75">
               {config.topK}
             </span>
           </div>
@@ -484,14 +484,14 @@ export function LLMArchitect({
             onValueChange={([v]) => onChange({ ...config, topK: v })}
             className="py-2"
           />
-          <p className="text-[10px] text-slate-500">
+          <p className="text-[10px] text-white/25">
             Only the {config.topK} most-likely next tokens are considered.
             Lower = safer & more on-topic.
           </p>
         </div>
 
         <div className="space-y-2">
-          <span className="text-xs text-slate-400 inline-flex items-center gap-1.5">
+          <span className="text-xs text-white/35 inline-flex items-center gap-1.5">
             <MessageSquare className="size-3 text-sky-300" />
             System Prompt
           </span>
@@ -502,14 +502,14 @@ export function LLMArchitect({
               onChange({ ...config, systemPrompt: e.target.value })
             }
             placeholder="Bot: I am a helpful AI."
-            className="w-full min-h-[40px] rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+            className="w-full min-h-[40px] rounded-xl border border-white/[0.07] bg-[#111111] px-3 py-2 text-xs font-mono text-white/88 placeholder:text-white/20 focus:outline-none focus:border-[#0A84FF]/40 transition-colors"
           />
-          <p className="text-[10px] text-slate-500">
+          <p className="text-[10px] text-white/25">
             Invisibly prepended to every chat prompt to lock the bot's persona.
           </p>
         </div>
 
-        <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-3 flex flex-wrap gap-1.5">
+        <div className="rounded-xl border border-white/[0.07] bg-[#111111] p-3 flex flex-wrap gap-1.5">
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-300 border border-sky-500/30">
             vocab: {vocabSize.toLocaleString()}
           </span>
@@ -530,11 +530,11 @@ export function LLMArchitect({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <BookOpen className="size-4 text-amber-400" />
-            <span className="text-sm font-semibold text-slate-100">
+            <span className="text-sm font-semibold text-white/88">
               Training Corpus
             </span>
           </div>
-          <span className="text-[10px] text-slate-500 tabular-nums">
+          <span className="text-[10px] text-white/25 tabular-nums">
             {formatBytes(corpusBytes)} / {formatBytes(MAX_CORPUS_BYTES)}
           </span>
         </div>
@@ -570,14 +570,14 @@ export function LLMArchitect({
           className={`rounded-xl border-2 border-dashed p-4 text-center cursor-pointer transition select-none min-h-[100px] flex flex-col items-center justify-center gap-1.5 ${
             dragOver
               ? "border-sky-400 bg-sky-500/10"
-              : "border-slate-700 hover:border-slate-500 hover:bg-slate-900/60"
+              : "border-white/[0.07] hover:border-white/[0.14] hover:bg-white/[0.02]"
           }`}
         >
           <Upload className="size-5 text-sky-300" />
-          <div className="text-xs font-semibold text-slate-200">
+          <div className="text-xs font-semibold text-white/75">
             Drop a <code className="text-sky-300">.txt</code> file here
           </div>
-          <div className="text-[10px] text-slate-500">
+          <div className="text-[10px] text-white/25">
             Paragraphs become <code className="font-mono">User:/Bot:</code> turns · max {formatBytes(MAX_CORPUS_BYTES)}
           </div>
           <input
@@ -621,7 +621,7 @@ export function LLMArchitect({
             value={factQ}
             onChange={(e) => setFactQ(e.target.value)}
             placeholder="Question (e.g. the capital of France)"
-            className="w-full min-h-[36px] rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+            className="w-full min-h-[36px] rounded-lg border border-white/[0.07] bg-[#121212] px-2.5 py-1.5 text-xs font-mono text-white/88 placeholder:text-white/20 focus:outline-none focus:border-[#30D158]/40 transition-colors"
           />
           <input
             type="text"
@@ -629,7 +629,7 @@ export function LLMArchitect({
             onChange={(e) => setFactA(e.target.value)}
             placeholder="Answer (e.g. Paris)"
             onKeyDown={(e) => { if (e.key === "Enter") addFactVariations(); }}
-            className="w-full min-h-[36px] rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+            className="w-full min-h-[36px] rounded-lg border border-white/[0.07] bg-[#121212] px-2.5 py-1.5 text-xs font-mono text-white/88 placeholder:text-white/20 focus:outline-none focus:border-[#30D158]/40 transition-colors"
           />
           <button
             type="button"
@@ -656,14 +656,14 @@ export function LLMArchitect({
           <div className="space-y-2">
             <div className="flex items-center gap-1.5">
               <Globe className="size-3.5 text-sky-300" />
-              <span className="text-[11px] font-semibold text-slate-200">
+              <span className="text-[11px] font-semibold text-white/75">
                 Wikipedia Knowledge Fetcher
               </span>
               <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/25">
                 3-sentence summary
               </span>
             </div>
-            <p className="text-[10px] text-slate-500">
+            <p className="text-[10px] text-white/25">
               Fetches a concise Wikipedia summary and creates a{" "}
               <code className="font-mono">User:/Bot:</code> dataset entry.
             </p>
@@ -674,7 +674,7 @@ export function LLMArchitect({
                 onChange={(e) => { setWikiTopic(e.target.value); setWikiStatus("idle"); setWikiMsg(""); }}
                 onKeyDown={(e) => { if (e.key === "Enter") fetchWikipedia(); }}
                 placeholder="Topic (e.g. Quantum Mechanics)"
-                className="flex-1 min-h-[36px] rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                className="flex-1 min-h-[36px] rounded-lg border border-white/[0.07] bg-[#121212] px-2.5 py-1.5 text-xs font-mono text-white/88 placeholder:text-white/20 focus:outline-none focus:border-[#0A84FF]/40 transition-colors"
               />
               <button
                 type="button"
@@ -706,11 +706,11 @@ export function LLMArchitect({
           <div className="space-y-2">
             <div className="flex items-center gap-1.5">
               <FileCode2 className="size-3.5 text-fuchsia-300" />
-              <span className="text-[11px] font-semibold text-slate-200">
+              <span className="text-[11px] font-semibold text-white/75">
                 Bulk Text Formatter
               </span>
             </div>
-            <p className="text-[10px] text-slate-500">
+            <p className="text-[10px] text-white/25">
               Upload a raw <code className="font-mono">.txt</code> file.
               Paragraphs are wrapped in alternating{" "}
               <code className="font-mono">User:/Bot:</code> turns and saved as a new dataset.
@@ -754,17 +754,17 @@ export function LLMArchitect({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <Database className="size-3.5 text-sky-300" />
-              <span className="text-xs font-semibold text-slate-200">
+              <span className="text-xs font-semibold text-white/75">
                 Corpus Library
               </span>
-              <span className="text-[10px] text-slate-500 tabular-nums">
+              <span className="text-[10px] text-white/25 tabular-nums">
                 ({datasets.filter((d) => d.active).length}/{datasets.length} active · {formatBytes(totalDatasetBytes)})
               </span>
             </div>
             <button
               type="button"
               onClick={() => addDataset("New Dataset", "")}
-              className="min-h-[28px] px-2.5 rounded-lg bg-slate-700/60 hover:bg-slate-700 border border-slate-600 text-slate-300 text-[11px] font-semibold inline-flex items-center gap-1 transition"
+              className="min-h-[28px] px-2.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.07] text-white/40 text-[11px] font-semibold inline-flex items-center gap-1 transition"
             >
               <Plus className="size-3" />
               Add
@@ -777,12 +777,12 @@ export function LLMArchitect({
                 key={ds.id}
                 className={`rounded-xl border transition ${
                   ds.active
-                    ? "border-slate-600 bg-slate-900/60"
-                    : "border-slate-700/50 bg-slate-900/30 opacity-60"
+                    ? "border-white/[0.08] bg-[#111111]"
+                    : "border-white/[0.04] bg-[#0d0d0d] opacity-60"
                 }`}
               >
                 {/* Dataset header */}
-                <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-700/50">
+                <div className="flex items-center gap-2 px-3 py-2 border-b border-white/[0.04]">
                   <div
                     className={`size-2 rounded-full shrink-0 ${
                       ds.active ? "bg-emerald-400" : "bg-slate-600"
@@ -792,7 +792,7 @@ export function LLMArchitect({
                     type="text"
                     value={ds.name}
                     onChange={(e) => updateDataset(ds.id, { name: e.target.value })}
-                    className="flex-1 min-w-0 bg-transparent text-[11px] font-semibold text-slate-200 placeholder:text-slate-500 focus:outline-none"
+                    className="flex-1 min-w-0 bg-transparent text-[11px] font-semibold text-white/75 placeholder:text-white/20 focus:outline-none"
                     placeholder="Dataset name"
                   />
                   <button
@@ -802,7 +802,7 @@ export function LLMArchitect({
                     className={`shrink-0 size-6 rounded-md flex items-center justify-center transition ${
                       ds.active
                         ? "text-emerald-300 hover:bg-emerald-500/20"
-                        : "text-slate-500 hover:bg-slate-700"
+                        : "text-white/25 hover:bg-slate-700"
                     }`}
                   >
                     {ds.active ? (
@@ -815,7 +815,7 @@ export function LLMArchitect({
                     type="button"
                     onClick={() => removeDataset(ds.id)}
                     title="Delete dataset"
-                    className="shrink-0 size-6 rounded-md flex items-center justify-center text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition"
+                    className="shrink-0 size-6 rounded-md flex items-center justify-center text-white/25 hover:text-rose-400 hover:bg-rose-500/10 transition"
                   >
                     <Trash2 className="size-3.5" />
                   </button>
@@ -829,7 +829,7 @@ export function LLMArchitect({
                   }}
                   rows={4}
                   placeholder="Paste or type corpus text here…"
-                  className="w-full rounded-b-xl bg-transparent px-3 py-2 text-[11px] font-mono text-slate-300 placeholder:text-slate-600 focus:outline-none resize-none"
+                  className="w-full rounded-b-xl bg-transparent px-3 py-2 text-[11px] font-mono text-white/60 placeholder:text-white/15 focus:outline-none resize-none"
                 />
               </div>
             ))}
@@ -839,7 +839,7 @@ export function LLMArchitect({
         <button
           onClick={onApply}
           disabled={overBudget || config.corpus.trim().length < 8}
-          className="w-full min-h-[44px] rounded-xl bg-gradient-to-br from-sky-500 to-emerald-500 text-slate-900 font-semibold text-sm flex items-center justify-center gap-1.5 shadow-lg shadow-sky-500/20 hover:brightness-110 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full min-h-[44px] rounded-xl bg-[#0A84FF] hover:bg-[#409CFF] text-white font-semibold text-sm flex items-center justify-center gap-1.5 transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Sparkles className="size-4" />
           Rebuild Model

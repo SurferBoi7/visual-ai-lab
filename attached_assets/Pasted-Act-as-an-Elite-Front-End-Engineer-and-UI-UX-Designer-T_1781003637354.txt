@@ -1,0 +1,23 @@
+Act as an Elite Front-End Engineer and UI/UX Designer. The structural layout is correct, but the internal controls (sliders, inputs, buttons, chat box) are still pulling forward legacy, non-premium UI. We need a thorough visual and interaction redesign of these views while strictly maintaining all training/inference state logic.
+
+Please execute the following updates:
+
+### 1. Unified "Apple Developer Studio" Controls Theme
+* **Sliders:** Replace all standard range inputs with ultra-sleek, custom custom-styled sliders. Use a thin track (bg-white/10), an explicit accent color filling the track progress (`#0A84FF`), and a minimalist circular thumb with no native borders.
+* **Inputs & Buttons:** Replace all default input styles. Inputs must have deep matte surfaces (bg-[#121212]), no harsh white backgrounds, zero borders unless focused (then a subtle blue border ring), and a crisp text layout. Buttons should use clean text weights, precise paddings, and smooth transitions.
+
+### 2. Full-Page Immersive Chat Sandbox
+* Overhaul the chat panel to span 100% of the viewport width and height inside its tab section. 
+* The interface must look completely seamless, similar to an premium terminal or modern web interpreter (deep matte background, clear layout).
+* Position the conversation thread container to expand vertically with absolute fluid scrolling.
+* Embed the "Model Selector" dropdown cleanly adjacent to or inside the bottom chat input bar as a borderless, minimalist badge/selector.
+
+### 3. Model Lifecycle Workflow in the Training Lab
+Restructure the training view state into a step-based configuration workflow:
+* **Step 1: The Fleet Dashboard:** The initial state of the tab displays a grid of saved model cards from the library array. Add a specialized card at the end: "+ Create New Base Model".
+* **Step 2: Configuration Setup:** Clicking "+ Create New Base Model" reveals a dark, focused setup pane asking for name, base context variables, and initial architecture parameters. 
+* **Step 3: Active Training Dashboard:** Saving the configuration or selecting any card from Step 1 opens its direct training controls. 
+  - When `isTraining` is TRUE: Conceal or dim the input configurations and display a beautiful, center-staged custom glowing/pulsating element (using clean CSS keyframe animations to signify continuous backpropagation) right above the real-time telemetry metrics (Loss, Epochs, Speed).
+  - When `isTraining` is FALSE: The animation disappears immediately, rendering the parameters adjustable again.
+
+Maintain all underlying dataset arrays, worker bindings, and text analysis pipelines perfectly intact. This update applies strictly to UI components, custom styles, and state-driven conditional steps.

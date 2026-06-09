@@ -10,6 +10,7 @@ import {
   MessageSquare,
   Plus,
   Trash2,
+  ArrowLeft,
 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -42,6 +43,7 @@ import {
 import { tokenize, type Tokenization } from "@/lib/textnet";
 
 type TabKey = "chat" | "train" | "deploy";
+type TrainStep = "fleet" | "setup" | "training";
 
 interface TextSnapshot {
   epoch: number;
@@ -197,6 +199,8 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false);
 
   const [tab, setTab] = useState<TabKey>("train");
+  const [trainStep, setTrainStep] = useState<TrainStep>("fleet");
+  const [newModelName, setNewModelName] = useState("");
   const [saveOpen, setSaveOpen] = useState(false);
   const [libraryRefresh, setLibraryRefresh] = useState(0);
   const [savedModels, setSavedModels] = useState<SavedModel[]>([]);
@@ -628,7 +632,6 @@ export default function App() {
       },
     });
     setMessages([]);
-    setTab("chat");
     toast({
       title: "Model loaded",
       description: `${model.name} is now active.`,
@@ -905,147 +908,295 @@ export default function App() {
         <div className="flex-1 overflow-hidden">
 
           {/* ──────────────────────────────────────────────────────────────────
-              TRAINING LAB — Master / Detail
+              TRAINING LAB — Step-based workflow
           ────────────────────────────────────────────────────────────────── */}
           {tab === "train" && (
-            <div className="h-full flex overflow-hidden">
+            <div className="h-full overflow-hidden">
 
-              {/* Left panel — model list */}
-              <div className="hidden sm:flex flex-col w-56 shrink-0 border-r border-white/[0.05] bg-[#090909] overflow-hidden">
-                <div className="px-2.5 pt-3 pb-2 border-b border-white/[0.05] shrink-0">
-                  <button
-                    onClick={() => { rebuildLLM(); setMessages([]); }}
-                    className="w-full h-9 rounded-xl border border-white/[0.07] hover:border-white/[0.13] bg-white/[0.02] hover:bg-white/[0.05] text-white/50 hover:text-white/80 text-xs font-medium flex items-center justify-center gap-2 transition-all"
-                  >
-                    <Plus className="size-3.5" />
-                    New Base Model
-                  </button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto py-1.5">
-                  {llmModels.length === 0 ? (
-                    <div className="text-center py-10 px-4 text-white/20 text-[11px] leading-relaxed">
-                      No saved models yet.<br />Train and save to build<br />your library.
+              {/* ─── Fleet Dashboard ──────────────────────────────────────── */}
+              {trainStep === "fleet" && (
+                <div className="h-full overflow-y-auto">
+                  <div className="max-w-3xl mx-auto py-8 px-5">
+                    <div className="mb-7">
+                      <h2 className="text-[17px] font-semibold text-white/88 tracking-tight">
+                        Model Fleet
+                      </h2>
+                      <p className="text-[12px] text-white/30 mt-0.5 leading-relaxed">
+                        Select a model to continue training, or create a new base model.
+                      </p>
                     </div>
-                  ) : (
-                    llmModels.map((m) => (
-                      <div key={m.id} className="group relative mx-1.5 mb-px">
-                        <button
-                          onClick={() => handleLoadModel(m)}
-                          className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-white/[0.05] transition-colors"
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {llmModels.map((m) => (
+                        <div
+                          key={m.id}
+                          className="group relative rounded-2xl border border-white/[0.06] bg-[#141414] hover:bg-[#181818] hover:border-white/[0.1] transition-all cursor-pointer overflow-hidden"
+                          onClick={() => { handleLoadModel(m); setTrainStep("training"); }}
                         >
-                          <div className="text-[12px] font-medium text-white/75 truncate pr-7">
-                            {m.name}
+                          <div className="p-4">
+                            <div className="flex items-start justify-between mb-3">
+                              <div className="size-9 rounded-xl bg-[#0A84FF]/10 border border-[#0A84FF]/15 flex items-center justify-center">
+                                <Brain className="size-4 text-[#0A84FF]/70" />
+                              </div>
+                              <span className="text-[9px] font-mono text-white/20 tracking-wider uppercase bg-white/[0.04] px-1.5 py-0.5 rounded-md">
+                                {m.type}
+                              </span>
+                            </div>
+                            <div className="text-[13px] font-semibold text-white/82 mb-1 truncate leading-snug">
+                              {m.name}
+                            </div>
+                            <div className="text-[10px] font-mono text-white/30 tabular-nums">
+                              ep {m.epoch} · loss {m.loss.toFixed(3)}
+                            </div>
+                            <div className="text-[10px] text-white/18 mt-0.5">
+                              {new Date(m.date).toLocaleDateString()}
+                            </div>
                           </div>
-                          <div className="text-[10px] text-white/25 mt-0.5 tabular-nums font-mono">
-                            ep {m.epoch} · {m.loss.toFixed(3)}
-                          </div>
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteModel(m.id);
-                          }}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 size-6 rounded-lg flex items-center justify-center text-white/15 hover:text-red-400 hover:bg-red-400/10 opacity-0 group-hover:opacity-100 transition-all"
-                        >
-                          <Trash2 className="size-3" />
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              {/* Right panel — config + training overlay */}
-              <div className="flex-1 relative overflow-y-auto">
-
-                {/* Training-in-progress overlay */}
-                {llmPlaying && (
-                  <div className="absolute inset-0 z-10 flex items-start justify-center pt-20 pointer-events-none">
-                    <div className="bg-[#0c0c0c]/85 backdrop-blur-lg rounded-2xl border border-white/[0.08] px-8 py-6 flex flex-col items-center gap-4 shadow-2xl">
-                      <div className="flex items-center gap-2.5">
-                        <span className="relative flex size-3">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#0A84FF] opacity-60" />
-                          <span className="relative inline-flex rounded-full size-3 bg-[#0A84FF]" />
-                        </span>
-                        <span className="text-[13px] font-semibold text-white tracking-tight">
-                          Training in Progress
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-5">
-                        <div className="text-center">
-                          <div className="text-[9px] uppercase tracking-[0.12em] text-white/30 mb-1.5 font-medium">
-                            Loss
-                          </div>
-                          <div className="text-2xl font-bold tabular-nums text-white">
-                            {textSnap.loss > 0
-                              ? textSnap.loss.toFixed(4)
-                              : "—"}
-                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDeleteModel(m.id); }}
+                            className="absolute top-3 right-3 size-6 rounded-lg flex items-center justify-center text-white/15 hover:text-red-400 hover:bg-red-400/10 opacity-0 group-hover:opacity-100 transition-all"
+                          >
+                            <Trash2 className="size-3" />
+                          </button>
                         </div>
-                        <div className="w-px h-10 bg-white/[0.07]" />
-                        <div className="text-center">
-                          <div className="text-[9px] uppercase tracking-[0.12em] text-white/30 mb-1.5 font-medium">
-                            Epoch
-                          </div>
-                          <div className="text-2xl font-bold tabular-nums text-white">
-                            {textSnap.epoch > 0 ? textSnap.epoch : "—"}
-                          </div>
-                        </div>
-                        <div className="w-px h-10 bg-white/[0.07]" />
-                        <div className="text-center">
-                          <div className="text-[9px] uppercase tracking-[0.12em] text-white/30 mb-1.5 font-medium">
-                            tok/s
-                          </div>
-                          <div className="text-2xl font-bold tabular-nums text-white">
-                            {textSnap.tokensPerSecond > 0
-                              ? textSnap.tokensPerSecond > 1000
-                                ? `${(textSnap.tokensPerSecond / 1000).toFixed(1)}k`
-                                : String(Math.round(textSnap.tokensPerSecond))
-                              : "—"}
-                          </div>
-                        </div>
-                      </div>
+                      ))}
+                      <button
+                        onClick={() => setTrainStep("setup")}
+                        className="rounded-2xl border-2 border-dashed border-white/[0.07] hover:border-[#0A84FF]/30 hover:bg-[#0A84FF]/[0.03] transition-all flex flex-col items-center justify-center gap-2.5 min-h-[140px] text-white/25 hover:text-[#0A84FF]/60"
+                      >
+                        <Plus className="size-6" />
+                        <span className="text-[12px] font-medium">New Base Model</span>
+                      </button>
                     </div>
                   </div>
-                )}
-
-                {/* Config + stats — dimmed while training */}
-                <div
-                  className={`p-4 md:p-5 pb-16 space-y-5 transition-opacity duration-300 ${
-                    llmPlaying
-                      ? "opacity-20 pointer-events-none select-none"
-                      : "opacity-100"
-                  }`}
-                >
-                  {/* Post-training stats (shown only after ≥1 epoch) */}
-                  {llmHasModel && (
-                    <LLMStats
-                      modelLabel={llmModelLabel}
-                      epoch={textSnap.epoch}
-                      loss={textSnap.loss}
-                      paramCount={textSnap.paramCount}
-                      vocabSize={textSnap.vocabSize}
-                      contextSize={textSnap.contextSize}
-                      hiddenSize={textSnap.hiddenSize}
-                      tokensPerSecond={textSnap.tokensPerSecond}
-                      trainedSamples={textSnap.trainedSamples}
-                      messageCount={messages.length}
-                      liveSample={textSnap.sample}
-                      tokenization={llmConfig.tokenization}
-                    />
-                  )}
-
-                  {TrainingConfig}
-
-                  <SharingHub
-                    mode="llm"
-                    onDownload={handleOpenSave}
-                    hasModel={llmHasModel}
-                    onImport={handleImportModel}
-                  />
                 </div>
-              </div>
+              )}
+
+              {/* ─── Configuration Setup ─────────────────────────────────── */}
+              {trainStep === "setup" && (
+                <div className="h-full overflow-y-auto">
+                  <div className="max-w-md mx-auto py-8 px-5 space-y-6">
+                    <button
+                      onClick={() => setTrainStep("fleet")}
+                      className="flex items-center gap-1.5 text-white/30 hover:text-white/60 text-[12px] transition-colors"
+                    >
+                      <ArrowLeft className="size-4" />
+                      Fleet
+                    </button>
+                    <div>
+                      <h2 className="text-[17px] font-semibold text-white/88 tracking-tight">
+                        New Model Configuration
+                      </h2>
+                      <p className="text-[12px] text-white/30 mt-0.5 leading-relaxed">
+                        Set the base architecture for your new language model.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[11px] text-white/35 font-medium">Model Name</label>
+                      <input
+                        type="text"
+                        value={newModelName}
+                        onChange={(e) => setNewModelName(e.target.value)}
+                        placeholder="My Language Model"
+                        className="w-full h-11 rounded-xl bg-[#121212] border border-white/[0.06] px-4 text-[13px] text-white/80 placeholder:text-white/20 focus:outline-none focus:border-[#0A84FF]/40 transition-colors"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[11px] text-white/35 font-medium">Tokenization</label>
+                      <div className="grid grid-cols-2 gap-1.5 bg-[#0a0a0a] rounded-xl border border-white/[0.05] p-1.5">
+                        <button
+                          onClick={() => setLLMConfig((c) => ({ ...c, tokenization: "char" }))}
+                          className={`h-9 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-all ${llmConfig.tokenization === "char" ? "bg-[#0A84FF]/15 text-[#0A84FF] border border-[#0A84FF]/20" : "text-white/30 hover:text-white/55"}`}
+                        >
+                          Char-Level
+                        </button>
+                        <button
+                          onClick={() => setLLMConfig((c) => ({ ...c, tokenization: "word" }))}
+                          className={`h-9 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-all ${llmConfig.tokenization === "word" ? "bg-[#30D158]/12 text-[#30D158] border border-[#30D158]/20" : "text-white/30 hover:text-white/55"}`}
+                        >
+                          Word-Level
+                        </button>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[11px] text-white/35 font-medium">Context Window</label>
+                        <span className="text-[11px] tabular-nums text-white/60 font-mono">{llmConfig.contextSize}</span>
+                      </div>
+                      <Slider min={1} max={20} step={1} value={[llmConfig.contextSize]} onValueChange={([v]) => setLLMConfig((c) => ({ ...c, contextSize: v }))} className="py-2" />
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[11px] text-white/35 font-medium">Hidden Neurons</label>
+                        <span className="text-[11px] tabular-nums text-white/60 font-mono">{llmConfig.hiddenSize}</span>
+                      </div>
+                      <Slider min={4} max={512} step={4} value={[llmConfig.hiddenSize]} onValueChange={([v]) => setLLMConfig((c) => ({ ...c, hiddenSize: v }))} className="py-2" />
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[11px] text-white/35 font-medium">Learning Rate</label>
+                        <span className="text-[11px] tabular-nums text-white/60 font-mono">{llmConfig.learningRate.toFixed(3)}</span>
+                      </div>
+                      <Slider min={0.005} max={0.5} step={0.005} value={[llmConfig.learningRate]} onValueChange={([v]) => setLLMConfig((c) => ({ ...c, learningRate: v }))} className="py-2" />
+                    </div>
+                    <div className="rounded-xl bg-[#0a0a0a] border border-white/[0.05] px-4 py-3 flex items-center justify-between">
+                      <span className="text-[11px] text-white/30">Est. parameters</span>
+                      <span className={`text-[11px] tabular-nums font-mono ${estimatedLLMParams > MAX_PARAMS_LLM ? "text-red-400" : "text-white/60"}`}>
+                        {estimatedLLMParams.toLocaleString()}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => { rebuildLLM(); setTrainStep("training"); setMessages([]); }}
+                      disabled={estimatedLLMParams > MAX_PARAMS_LLM}
+                      className="w-full h-12 rounded-xl bg-[#0A84FF] hover:bg-[#409CFF] text-white font-semibold text-[13px] flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Play className="size-4" />
+                      Initialize &amp; Begin Training
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ─── Active Training Dashboard ───────────────────────────── */}
+              {trainStep === "training" && (
+                <div className="h-full flex overflow-hidden">
+                  {/* Left panel — model list */}
+                  <div className="hidden sm:flex flex-col w-56 shrink-0 border-r border-white/[0.05] bg-[#090909] overflow-hidden">
+                    <div className="px-2.5 pt-3 pb-2 border-b border-white/[0.05] shrink-0 space-y-1.5">
+                      <button
+                        onClick={() => setTrainStep("fleet")}
+                        className="w-full h-8 rounded-xl text-white/30 hover:text-white/60 text-[11px] flex items-center gap-2 px-3 hover:bg-white/[0.03] transition-colors"
+                      >
+                        <ArrowLeft className="size-3.5" />
+                        Model Fleet
+                      </button>
+                      <button
+                        onClick={() => setTrainStep("setup")}
+                        className="w-full h-9 rounded-xl border border-white/[0.07] hover:border-white/[0.13] bg-white/[0.02] hover:bg-white/[0.05] text-white/50 hover:text-white/80 text-xs font-medium flex items-center justify-center gap-2 transition-all"
+                      >
+                        <Plus className="size-3.5" />
+                        New Base Model
+                      </button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto py-1.5">
+                      {llmModels.length === 0 ? (
+                        <div className="text-center py-10 px-4 text-white/20 text-[11px] leading-relaxed">
+                          No saved models yet.<br />Train and save to build<br />your library.
+                        </div>
+                      ) : (
+                        llmModels.map((m) => (
+                          <div key={m.id} className="group relative mx-1.5 mb-px">
+                            <button
+                              onClick={() => handleLoadModel(m)}
+                              className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-white/[0.05] transition-colors"
+                            >
+                              <div className="text-[12px] font-medium text-white/75 truncate pr-7">
+                                {m.name}
+                              </div>
+                              <div className="text-[10px] text-white/25 mt-0.5 tabular-nums font-mono">
+                                ep {m.epoch} · {m.loss.toFixed(3)}
+                              </div>
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDeleteModel(m.id); }}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 size-6 rounded-lg flex items-center justify-center text-white/15 hover:text-red-400 hover:bg-red-400/10 opacity-0 group-hover:opacity-100 transition-all"
+                            >
+                              <Trash2 className="size-3" />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right panel — config + pulsing training overlay */}
+                  <div className="flex-1 relative overflow-y-auto">
+
+                    {/* Training-in-progress overlay — pulsing neural animation */}
+                    {llmPlaying && (
+                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-8 pointer-events-none">
+                        <div className="relative flex items-center justify-center">
+                          <div
+                            className="absolute rounded-full border border-[#0A84FF]/25"
+                            style={{ width: 160, height: 160, animation: "backprop-ring 2.4s ease-out infinite 0s" }}
+                          />
+                          <div
+                            className="absolute rounded-full border border-[#0A84FF]/18"
+                            style={{ width: 160, height: 160, animation: "backprop-ring 2.4s ease-out infinite 0.8s" }}
+                          />
+                          <div
+                            className="absolute rounded-full border border-[#0A84FF]/12"
+                            style={{ width: 160, height: 160, animation: "backprop-ring 2.4s ease-out infinite 1.6s" }}
+                          />
+                          <div
+                            className="size-20 rounded-full bg-[#0A84FF]/8 border border-[#0A84FF]/18 flex items-center justify-center"
+                            style={{ animation: "backprop-orb 2s ease-in-out infinite" }}
+                          >
+                            <Brain className="size-8 text-[#0A84FF]/60" />
+                          </div>
+                        </div>
+                        <div className="bg-[#0c0c0c]/90 backdrop-blur-xl rounded-2xl border border-white/[0.07] px-8 py-5 flex items-center gap-6">
+                          <div className="text-center">
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-white/25 mb-1.5 font-medium">Loss</div>
+                            <div className="text-2xl font-bold tabular-nums text-white">
+                              {textSnap.loss > 0 ? textSnap.loss.toFixed(4) : "—"}
+                            </div>
+                          </div>
+                          <div className="w-px h-10 bg-white/[0.07]" />
+                          <div className="text-center">
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-white/25 mb-1.5 font-medium">Epoch</div>
+                            <div className="text-2xl font-bold tabular-nums text-white">
+                              {textSnap.epoch > 0 ? textSnap.epoch : "—"}
+                            </div>
+                          </div>
+                          <div className="w-px h-10 bg-white/[0.07]" />
+                          <div className="text-center">
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-white/25 mb-1.5 font-medium">tok/s</div>
+                            <div className="text-2xl font-bold tabular-nums text-white">
+                              {textSnap.tokensPerSecond > 0
+                                ? textSnap.tokensPerSecond > 1000
+                                  ? `${(textSnap.tokensPerSecond / 1000).toFixed(1)}k`
+                                  : String(Math.round(textSnap.tokensPerSecond))
+                                : "—"}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Config + stats — dimmed while training */}
+                    <div
+                      className={`p-4 md:p-5 pb-16 space-y-5 transition-opacity duration-300 ${
+                        llmPlaying ? "opacity-20 pointer-events-none select-none" : "opacity-100"
+                      }`}
+                    >
+                      {llmHasModel && (
+                        <LLMStats
+                          modelLabel={llmModelLabel}
+                          epoch={textSnap.epoch}
+                          loss={textSnap.loss}
+                          paramCount={textSnap.paramCount}
+                          vocabSize={textSnap.vocabSize}
+                          contextSize={textSnap.contextSize}
+                          hiddenSize={textSnap.hiddenSize}
+                          tokensPerSecond={textSnap.tokensPerSecond}
+                          trainedSamples={textSnap.trainedSamples}
+                          messageCount={messages.length}
+                          liveSample={textSnap.sample}
+                          tokenization={llmConfig.tokenization}
+                        />
+                      )}
+                      {TrainingConfig}
+                      <SharingHub
+                        mode="llm"
+                        onDownload={handleOpenSave}
+                        hasModel={llmHasModel}
+                        onImport={handleImportModel}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
             </div>
           )}
 
@@ -1053,69 +1204,24 @@ export default function App() {
               CHAT SANDBOX
           ────────────────────────────────────────────────────────────────── */}
           {tab === "chat" && (
-            <div className="h-full flex flex-col overflow-hidden">
-
-              {/* Model selector strip */}
-              <div className="shrink-0 border-b border-white/[0.05] px-4 py-2 flex items-center gap-3 bg-[#090909]">
-                <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-white/25 shrink-0">
-                  Model
-                </span>
-                <Select
-                  onValueChange={(id) => {
-                    const m = savedModels.find((s) => s.id === id);
-                    if (m) handleLoadModel(m);
-                  }}
-                >
-                  <SelectTrigger className="h-8 max-w-[280px] text-xs rounded-lg border-white/[0.08] bg-white/[0.03] text-white/55 focus:ring-0 focus:ring-offset-0">
-                    <SelectValue placeholder={llmModelLabel} />
-                  </SelectTrigger>
-                  <SelectContent className="bg-[#141414] border-white/[0.08]">
-                    {llmModels.length === 0 ? (
-                      <div className="px-3 py-2 text-[11px] text-white/30">
-                        No saved models — train one first
-                      </div>
-                    ) : (
-                      llmModels.map((m) => (
-                        <SelectItem
-                          key={m.id}
-                          value={m.id}
-                          className="text-xs text-white/70"
-                        >
-                          {m.name}
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
-
-                {llmHasModel && (
-                  <div className="ml-auto flex items-center gap-1.5 shrink-0">
-                    <span
-                      className="size-1.5 rounded-full bg-[#30D158]"
-                      style={{ boxShadow: "0 0 5px #30D158" }}
-                    />
-                    <span className="text-[10px] text-[#30D158] font-medium tabular-nums">
-                      ep {textSnap.epoch} · {textSnap.loss.toFixed(3)}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Chat view fills remaining height */}
-              <div className="flex-1 overflow-hidden">
-                <ChatView
-                  modelLabel={llmModelLabel}
-                  messages={messages}
-                  setMessages={setMessages}
-                  loading={chatLoading}
-                  setLoading={setChatLoading}
-                  generate={generateFromWorker}
-                  liveSample={textSnap.sample}
-                  epoch={textSnap.epoch}
-                  loss={textSnap.loss}
-                  isTraining={llmPlaying}
-                />
-              </div>
+            <div className="h-full overflow-hidden">
+              <ChatView
+                modelLabel={llmModelLabel}
+                messages={messages}
+                setMessages={setMessages}
+                loading={chatLoading}
+                setLoading={setChatLoading}
+                generate={generateFromWorker}
+                liveSample={textSnap.sample}
+                epoch={textSnap.epoch}
+                loss={textSnap.loss}
+                isTraining={llmPlaying}
+                modelOptions={llmModels.map((m) => ({ id: m.id, label: m.name }))}
+                onSelectModel={(id) => {
+                  const m = savedModels.find((s) => s.id === id);
+                  if (m) handleLoadModel(m);
+                }}
+              />
             </div>
           )}
 
