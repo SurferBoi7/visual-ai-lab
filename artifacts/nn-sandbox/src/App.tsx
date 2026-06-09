@@ -1310,18 +1310,6 @@ export default function App() {
   const BrainContent = mode === "mlp" ? MLPBrain : LLMBrain;
   const OutputContent = mode === "mlp" ? MLPOutput : LLMOutput;
 
-  const tabs: { key: TabKey; label: string; icon: typeof Brain }[] = [
-    { key: "architect", label: "Architect", icon: SlidersHorizontal },
-    {
-      key: "brain",
-      label: mode === "mlp" ? "Brain" : "Chat",
-      icon: mode === "mlp" ? Network : MessageSquare,
-    },
-    { key: "output", label: "Output", icon: LineChart },
-    { key: "library", label: "Library", icon: LibraryIcon },
-  ];
-  const tabIndex = tabs.findIndex((t) => t.key === tab);
-
   const LibraryContent = (
     <LibraryView
       refreshKey={libraryRefresh}
@@ -1330,128 +1318,287 @@ export default function App() {
     />
   );
 
+  const isFleet = tab === "output" || tab === "library";
+
   return (
-    <div className="min-h-screen bg-apple-bg text-slate-100">
-      <header className="sticky top-0 z-20 border-b border-apple-divider/10 bg-apple-bg/90 backdrop-blur-md">
-        <div className="px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="size-8 rounded-lg bg-gradient-to-br from-sky-500 to-emerald-500 flex items-center justify-center shrink-0">
-              <Brain className="size-4 text-slate-900" />
-            </div>
-            <div className="min-w-0 hidden sm:block">
-              <div className="text-sm font-semibold tracking-tight truncate">
-                AI Sandbox
-              </div>
-              <div className="text-[11px] text-slate-400 hidden sm:block truncate">
-                Build, train, and ship tiny models — entirely in the browser.
-              </div>
-            </div>
+    <div className="h-dvh bg-[#0a0a0a] text-slate-100 flex overflow-hidden">
+
+      {/* ═══════════════════════════════════════════════════════════════════
+          LEFT SIDEBAR — desktop (md+)
+      ══════════════════════════════════════════════════════════════════════ */}
+      <aside className="hidden md:flex flex-col w-[220px] shrink-0 border-r border-white/[0.06] bg-[#0c0c0c]">
+
+        {/* Logo */}
+        <div className="h-14 px-4 flex items-center gap-3 border-b border-white/[0.06] shrink-0">
+          <div className="size-7 rounded-lg bg-[#0A84FF]/15 border border-[#0A84FF]/20 flex items-center justify-center shrink-0">
+            <Brain className="size-3.5 text-[#0A84FF]" />
           </div>
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div>
+            <div className="text-[13px] font-semibold tracking-tight text-white leading-none">
+              AI Foundry
+            </div>
+            <div className="text-[10px] text-white/30 mt-0.5">browser-native ML</div>
+          </div>
+        </div>
+
+        {/* Nav */}
+        <nav className="flex-1 px-2.5 py-3 space-y-0.5 overflow-y-auto">
+          <FoundryNavItem
+            icon={Layers}
+            label="Model Fleet"
+            active={isFleet}
+            onClick={() => setTab("output")}
+          />
+          <FoundryNavItem
+            icon={SlidersHorizontal}
+            label="Training Foundry"
+            active={tab === "architect"}
+            onClick={() => setTab("architect")}
+          />
+          <FoundryNavItem
+            icon={MessageSquare}
+            label="Chat Studio"
+            active={tab === "brain"}
+            onClick={() => setTab("brain")}
+          />
+        </nav>
+
+        {/* Bottom controls */}
+        <div className="px-2.5 pb-5 pt-3 border-t border-white/[0.06] space-y-2.5 shrink-0">
+          <div className="px-0.5">
             <ModeToggle mode={mode} onChange={handleModeChange} />
-            <div className="w-px h-6 bg-slate-800 mx-0.5 hidden sm:block" />
-            <Button
-              size="icon"
-              variant="secondary"
+          </div>
+          <div className="flex gap-1.5">
+            <button
               onClick={handleReset}
-              aria-label="Reset"
-              className="sm:hidden size-10 rounded-xl"
-            >
-              <RefreshCcw className="size-4" />
-            </Button>
-            <Button
-              size="icon"
-              variant="secondary"
-              onClick={handleOpenSave}
-              aria-label="Save"
-              className="sm:hidden size-10 rounded-xl"
-            >
-              <Save className="size-4" />
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={handleReset}
-              className="hidden sm:inline-flex gap-1.5 min-h-[40px] rounded-xl"
+              title="Reset"
+              className="flex-1 h-9 flex items-center justify-center rounded-lg border border-white/[0.07] text-white/40 hover:text-white/70 hover:bg-white/[0.05] transition-colors"
             >
               <RefreshCcw className="size-3.5" />
-              Reset
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
+            </button>
+            <button
               onClick={handleOpenSave}
-              className="hidden sm:inline-flex gap-1.5 min-h-[40px] rounded-xl"
+              title="Save"
+              className="flex-1 h-9 flex items-center justify-center rounded-lg border border-white/[0.07] text-white/40 hover:text-white/70 hover:bg-white/[0.05] transition-colors"
             >
               <Save className="size-3.5" />
-              Save
-            </Button>
-            <Button
+            </button>
+            <button
               onClick={handlePlay}
-              className="gap-1.5 min-w-[88px] sm:min-w-[96px] min-h-[40px] rounded-xl"
+              title={isPlaying ? "Pause" : "Train"}
+              className={`flex-1 h-9 flex items-center justify-center gap-1 rounded-lg text-[11px] font-semibold transition-colors ${
+                isPlaying
+                  ? "bg-[#0A84FF]/15 text-[#0A84FF] border border-[#0A84FF]/25 hover:bg-[#0A84FF]/25"
+                  : "bg-[#0A84FF] text-white border border-transparent hover:bg-[#409CFF]"
+              }`}
             >
               {isPlaying ? (
-                <>
-                  <Pause className="size-4" />
-                  Pause
-                </>
+                <Pause className="size-3.5" />
               ) : (
-                <>
-                  <Play className="size-4" />
-                  {playLabel}
-                </>
+                <Play className="size-3.5" />
               )}
-            </Button>
+              {isPlaying ? "Pause" : "Train"}
+            </button>
           </div>
         </div>
-      </header>
+      </aside>
 
-      {/* ── Unified tab content — all screen sizes ───────────────────────── */}
-      <main
-        className="overflow-y-auto w-full pb-28"
-        style={{ height: "calc(100vh - 3.5rem)" }}
-      >
-        <div className="max-w-5xl mx-auto flex flex-col gap-6 p-4">
-          {tab === "architect" && ArchitectContent}
-          {tab === "brain" && BrainContent}
-          {tab === "output" && OutputContent}
-          {tab === "library" && LibraryContent}
-        </div>
-      </main>
+      {/* ═══════════════════════════════════════════════════════════════════
+          MAIN CONTENT AREA
+      ══════════════════════════════════════════════════════════════════════ */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
-      {/* ── Tab nav — visible on all screen sizes ────────────────────────── */}
-      <nav className="fixed bottom-0 inset-x-0 z-20 border-t border-apple-divider/10 bg-apple-bg/95 backdrop-blur-lg">
+        {/* Top bar */}
+        <header className="h-14 shrink-0 border-b border-white/[0.06] bg-[#0c0c0c]/80 backdrop-blur-xl flex items-center justify-between px-4 md:px-5 gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            {/* Mobile-only logo dot */}
+            <div className="md:hidden size-7 rounded-lg bg-[#0A84FF]/15 border border-[#0A84FF]/20 flex items-center justify-center shrink-0">
+              <Brain className="size-3.5 text-[#0A84FF]" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold text-white tracking-tight truncate">
+                {isFleet
+                  ? "Model Fleet"
+                  : tab === "architect"
+                    ? "Training Foundry"
+                    : "Chat Studio"}
+              </div>
+              <div className="text-[10px] text-white/35 tabular-nums truncate">
+                {mode === "llm"
+                  ? llmModelLabel
+                  : `${layers.join("→")} · ${estimatedMLPParams}p`}
+              </div>
+            </div>
+          </div>
+          {/* Mobile-only controls */}
+          <div className="md:hidden flex items-center gap-1.5 shrink-0">
+            <ModeToggle mode={mode} onChange={handleModeChange} />
+            <button
+              onClick={handleReset}
+              className="size-9 rounded-lg border border-white/[0.07] text-white/40 hover:text-white/70 hover:bg-white/[0.05] flex items-center justify-center transition-colors"
+            >
+              <RefreshCcw className="size-3.5" />
+            </button>
+            <button
+              onClick={handleOpenSave}
+              className="size-9 rounded-lg border border-white/[0.07] text-white/40 hover:text-white/70 hover:bg-white/[0.05] flex items-center justify-center transition-colors"
+            >
+              <Save className="size-3.5" />
+            </button>
+          </div>
+        </header>
+
+        {/* Scrollable view content */}
+        <main className="flex-1 overflow-y-auto">
+          <div className="max-w-5xl mx-auto p-4 md:p-6 pb-24 md:pb-8 space-y-5">
+
+            {/* ── MODEL FLEET ─────────────────────────────────────────────── */}
+            {isFleet && (
+              <div className="space-y-6">
+
+                {/* Premium model cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+                  {/* Active model card */}
+                  <div className="rounded-2xl border border-white/[0.08] bg-[#141414] p-5 space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span
+                            className={`size-1.5 rounded-full bg-[#30D158] ${isPlaying ? "animate-pulse" : ""}`}
+                          />
+                          <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-[#30D158]">
+                            {isPlaying ? "Training" : "Active"}
+                          </span>
+                        </div>
+                        <div className="text-[15px] font-semibold text-white leading-tight">
+                          {mode === "llm" ? "Tiny Text LM" : "Visual MLP"}
+                        </div>
+                        <div className="mt-1 font-mono text-[11px] text-white/40 truncate">
+                          {mode === "llm"
+                            ? llmModelLabel
+                            : `${layers.join(" → ")} · ${activation}`}
+                        </div>
+                      </div>
+                      <div className="size-10 rounded-xl bg-[#0A84FF]/10 border border-[#0A84FF]/15 flex items-center justify-center shrink-0">
+                        <Brain className="size-5 text-[#0A84FF]" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <FleetMetric
+                        label="Loss"
+                        value={
+                          mode === "llm"
+                            ? textSnap.loss > 0 ? textSnap.loss.toFixed(3) : "—"
+                            : snap?.loss ? snap.loss.toFixed(3) : "—"
+                        }
+                      />
+                      <FleetMetric
+                        label={mode === "llm" ? "Vocab" : "Params"}
+                        value={
+                          mode === "llm"
+                            ? textSnap.vocabSize > 0 ? String(textSnap.vocabSize) : "—"
+                            : String(estimatedMLPParams)
+                        }
+                      />
+                      <FleetMetric
+                        label="Epoch"
+                        value={
+                          mode === "llm"
+                            ? textSnap.epoch > 0 ? String(textSnap.epoch) : "—"
+                            : snap?.epoch ? String(snap.epoch) : "—"
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  {/* Coming soon — Vision Model */}
+                  <div className="rounded-2xl border border-white/[0.04] bg-[#0e0e0e] p-5 space-y-4 select-none">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-white/20">
+                            Coming Soon
+                          </span>
+                        </div>
+                        <div className="text-[15px] font-semibold text-white/30 leading-tight">
+                          Vision Model
+                        </div>
+                        <div className="mt-1 text-[11px] text-white/20">
+                          Image encoder · multi-modal
+                        </div>
+                      </div>
+                      <div className="size-10 rounded-xl bg-white/[0.03] border border-white/[0.05] flex items-center justify-center shrink-0">
+                        <Zap className="size-5 text-white/15" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <FleetMetric label="Loss" value="—" dim />
+                      <FleetMetric label="Params" value="—" dim />
+                      <FleetMetric label="Epoch" value="—" dim />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Existing telemetry / sharing */}
+                {OutputContent}
+
+                {/* Saved model library */}
+                {LibraryContent}
+              </div>
+            )}
+
+            {/* ── TRAINING FOUNDRY ────────────────────────────────────────── */}
+            {tab === "architect" && ArchitectContent}
+
+            {/* ── CHAT STUDIO ─────────────────────────────────────────────── */}
+            {tab === "brain" && BrainContent}
+
+          </div>
+        </main>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════
+          MOBILE BOTTOM NAV
+      ══════════════════════════════════════════════════════════════════════ */}
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-20 border-t border-white/[0.06] bg-[#0c0c0c]/96 backdrop-blur-xl">
         <div className="grid grid-cols-4">
-          {tabs.map((t) => {
-            const Icon = t.icon;
-            const active = tab === t.key;
-            return (
-              <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                className={`flex flex-col items-center justify-center gap-1 py-2.5 min-h-[60px] transition-colors ${
-                  active
-                    ? "text-sky-400"
-                    : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                <Icon
-                  className={`size-5 ${active ? "drop-shadow-[0_0_8px_rgba(56,189,248,0.6)]" : ""}`}
-                />
-                <span className="text-[10px] font-medium tracking-wide uppercase">
-                  {t.label}
-                </span>
-              </button>
-            );
-          })}
+          <MobileNavButton
+            icon={Layers}
+            label="Fleet"
+            active={isFleet}
+            onClick={() => setTab("output")}
+          />
+          <MobileNavButton
+            icon={SlidersHorizontal}
+            label="Foundry"
+            active={tab === "architect"}
+            onClick={() => setTab("architect")}
+          />
+          <MobileNavButton
+            icon={MessageSquare}
+            label="Studio"
+            active={tab === "brain"}
+            onClick={() => setTab("brain")}
+          />
+          <button
+            onClick={handlePlay}
+            className={`flex flex-col items-center justify-center gap-1 py-2.5 min-h-[60px] transition-colors ${
+              isPlaying
+                ? "text-[#0A84FF]"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            {isPlaying ? (
+              <Pause className="size-5" />
+            ) : (
+              <Play className="size-5" />
+            )}
+            <span className="text-[10px] font-medium tracking-wide uppercase">
+              {isPlaying ? "Pause" : "Train"}
+            </span>
+          </button>
         </div>
-        <div
-          className="absolute top-0 h-0.5 bg-sky-400 transition-all duration-300"
-          style={{
-            width: "25%",
-            left: `${Math.max(0, tabIndex) * 25}%`,
-          }}
-        />
       </nav>
 
       <SaveModal
@@ -1516,6 +1663,97 @@ function ResponsiveDataView({ snap }: { snap: SnapshotMsg | null }) {
         gridRes={snap?.gridRes ?? 28}
         size={size}
       />
+    </div>
+  );
+}
+
+function FoundryNavItem({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-all ${
+        active
+          ? "bg-[#0A84FF]/12 text-[#0A84FF] border border-[#0A84FF]/15"
+          : "text-white/45 hover:text-white/80 hover:bg-white/[0.05] border border-transparent"
+      }`}
+    >
+      <Icon
+        className={`size-4 shrink-0 ${active ? "text-[#0A84FF]" : "text-white/35"}`}
+      />
+      {label}
+    </button>
+  );
+}
+
+function MobileNavButton({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex flex-col items-center justify-center gap-1 py-2.5 min-h-[60px] transition-colors ${
+        active ? "text-[#0A84FF]" : "text-slate-400 hover:text-slate-200"
+      }`}
+    >
+      <Icon
+        className={`size-5 ${active ? "drop-shadow-[0_0_8px_rgba(10,132,255,0.5)]" : ""}`}
+      />
+      <span className="text-[10px] font-medium tracking-wide uppercase">
+        {label}
+      </span>
+    </button>
+  );
+}
+
+function FleetMetric({
+  label,
+  value,
+  dim = false,
+}: {
+  label: string;
+  value: string;
+  dim?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-xl border px-3 py-2.5 ${
+        dim
+          ? "border-white/[0.04] bg-white/[0.02]"
+          : "border-white/[0.07] bg-white/[0.03]"
+      }`}
+    >
+      <div
+        className={`text-[9px] uppercase tracking-[0.1em] font-medium mb-1 ${
+          dim ? "text-white/20" : "text-white/35"
+        }`}
+      >
+        {label}
+      </div>
+      <div
+        className={`text-sm font-semibold tabular-nums ${
+          dim ? "text-white/20" : "text-white"
+        }`}
+      >
+        {value}
+      </div>
     </div>
   );
 }

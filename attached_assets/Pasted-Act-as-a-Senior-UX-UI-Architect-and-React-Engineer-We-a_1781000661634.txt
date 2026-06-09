@@ -1,0 +1,27 @@
+Act as a Senior UX/UI Architect and React Engineer. We are executing a massive visual and structural overhaul to turn this app into a professional "AI Foundry." 
+
+Your prime directive: DO NOT alter `textnet.ts`, `text.worker.ts`, or any of the underlying React state logic, inference loops, or data ingestion pipelines in `App.tsx` or `LLMArchitect.tsx`. This is strictly a UI shell, layout, and CSS refactor.
+
+Please implement the following design paradigm:
+
+### 1. The "Apple Pro" Aesthetic
+* Eliminate all generic "AI" visual tropes (no neon gradients, glowing borders, or starry backgrounds).
+* Use a premium, muted color palette: deep matte backgrounds (e.g., `#1A1A1A` to `#000000`), crisp white/gray typography, and subtle, structural borders (`1px solid rgba(255,255,255,0.1)`).
+* Use System fonts (San Francisco/Inter) with strict attention to weight and hierarchy.
+* Employ subtle glassmorphism (backdrop-filter blurs) for floating elements or top navigation, mimicking macOS.
+* Pick one single, highly professional accent color (like a muted electric blue or sleek graphite) for active states and primary buttons.
+
+### 2. The Global "Foundry" Shell
+* Refactor the global layout into a professional software suite. 
+* Implement a persistent, sleek left-hand Sidebar (or a native-feeling top macOS-style toolbar). 
+* The navigation should include three main views: 
+  1. "Model Fleet" (The main dashboard showing available models).
+  2. "Training Foundry" (The current Architect tab / Corpus Library).
+  3. "Chat Studio" (The inference interface).
+
+### 3. View Encapsulation
+* **Model Fleet (New):** Build a sleek dashboard view. Display the current "Tiny Text LM" as a premium, active card showing its current telemetry (Loss, Vocab Size, Params). Add a second, disabled card for "Vision Model (Coming Soon)" to establish the multi-modal platform concept.
+* **Training Foundry:** Redesign the dataset uploaders and Corpus Library to look like professional data-ingestion pipelines. Keep all the functionality exactly the same, but make the inputs, drag-and-drop zones, and list items look like native macOS/iOS components.
+* **Chat Studio:** Redesign the chat interface to look ultra-minimalist, similar to a clean terminal or a high-end messaging client. 
+
+Maintain all existing state passing. Ensure that switching between these views is seamless and does not unmount or reset the underlying WebWorker or model configurations unless intentionally clearing the model.
