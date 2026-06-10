@@ -1,0 +1,27 @@
+Act as an Expert React & UI/UX Engineer. We need to polish our "Tiny AI Foundry" platform to fix layout bugs, bind missing live telemetry states, and streamline the training workspace viewports. 
+
+DO NOT change the underlying textnet.ts or worker message listeners. This is an explicit UI layout, state wiring, and sub-navigation cleanup task.
+
+Please apply the following changes:
+
+### 1. Global Navigation Updates
+* In the global left sidebar navigation, change the text label "Model Fleet" to simply "Models".
+
+### 2. Connect Live Telemetry Stats (App.tsx)
+* Locate the newly added Training Status page and the small stats bar in the top right corner of the dashboard header.
+* Bind their value readouts directly to our live training state refs/variables: Loss, Epoch, and Tokens Trained. 
+* Ensure that when the model is actively training, these metrics update on screen in real time with every worker message tick.
+
+### 3. Training Lab Workspace Restructuring
+* **Remove Sub-Sidebar:** Strip out the small left-hand model list column inside the model details page. Since we have our main card selector grid at the start of the Training Lab, this internal column is redundant and takes up vital horizontal layout space.
+* **Non-Scrollable Layout Panels:** Restructure the internal panels so that the workspace fills the viewport without pushing tools off the bottom of the screen.
+* **Dedicated "Dataset Explorer" Tab:** Add a 4th tab to the internal training workspace mini-bar:
+  1. [Architecture & Hypers]
+  2. [Dataset Preparation] (Keep this clean, solid, and non-scrollable)
+  3. [Dataset Explorer] (NEW - Make this section exclusively scrollable to hold and render all raw training data rows. It must automatically refresh when new items are added)
+  4. [Training Status]
+
+### 4. Chat Page Model Selector Guard (ChatView.tsx)
+* Fix the model selector dropdown inside the Chat Sandbox: If the `savedModelsLibrary` array is completely empty (no custom models have been configured and saved yet), the selector must show a clean blank state or read "No Models Available". 
+* Prevent it from falling back to arbitrary hardcoded strings. The select interface must only unlock and display a model option once a custom model has been successfully created.
+* Retain the "Clear Chat" button near the text input bar to cleanly reset the prompt thread state for the active profile.

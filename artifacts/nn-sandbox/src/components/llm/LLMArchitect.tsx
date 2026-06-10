@@ -57,7 +57,7 @@ interface Props {
   datasets: Dataset[];
   onDatasetsChange: (next: Dataset[]) => void;
   /** When provided, only the specified section is rendered. */
-  section?: "arch" | "dataset";
+  section?: "arch" | "dataset" | "dataset-tools";
 }
 
 export const MAX_CORPUS_BYTES = 1_000_000;
@@ -245,7 +245,8 @@ export function LLMArchitect({
   const corpusBytes = new Blob([config.corpus]).size;
 
   const showArch = !section || section === "arch";
-  const showDataset = !section || section === "dataset";
+  const showDataset = !section || section === "dataset" || section === "dataset-tools";
+  const showDatasetList = !section || section === "dataset";
 
   return (
     <div className="space-y-4">
@@ -430,8 +431,8 @@ export function LLMArchitect({
             </div>
           )}
 
-          {/* Active Datasets */}
-          {datasets.length > 0 && (
+          {/* Active Datasets — hidden in dataset-tools mode (shown in explorer tab) */}
+          {datasets.length > 0 && showDatasetList && (
             <div className="space-y-1.5">
               <span className="text-[11px] text-white/30 font-medium flex items-center gap-1.5">
                 <Database className="size-3" />

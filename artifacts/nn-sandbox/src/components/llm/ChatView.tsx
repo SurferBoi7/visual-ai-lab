@@ -235,10 +235,10 @@ export function ChatView({
         <div className="shrink-0 px-4 pb-4 pt-2">
           <div className="max-w-2xl mx-auto space-y-2">
 
-            {/* Model selector row */}
-            {modelOptions && modelOptions.length > 0 && (
-              <div className="flex items-center gap-2 px-1">
-                <span className="text-[10px] text-white/22 font-medium shrink-0">Model:</span>
+            {/* Model selector + clear chat row — always rendered */}
+            <div className="flex items-center gap-2 px-1">
+              <span className="text-[10px] text-white/22 font-medium shrink-0">Model:</span>
+              {modelOptions && modelOptions.length > 0 ? (
                 <div className="relative" ref={selectorRef}>
                   <button
                     onClick={() => setModelSelectorOpen(!modelSelectorOpen)}
@@ -263,20 +263,24 @@ export function ChatView({
                     </div>
                   )}
                 </div>
+              ) : (
+                <span className="h-6 px-2.5 flex items-center rounded-lg bg-white/[0.02] border border-white/[0.04] text-[10px] font-mono text-white/18 select-none cursor-default">
+                  No models available
+                </span>
+              )}
 
-                <div className="flex-1" />
+              <div className="flex-1" />
 
-                {messages.length > 0 && (
-                  <button
-                    onClick={() => setMessages([])}
-                    className="flex items-center gap-1 h-6 px-2.5 rounded-lg text-[10px] text-white/20 hover:text-red-400/70 hover:bg-red-400/8 border border-transparent hover:border-red-400/15 transition-all"
-                  >
-                    <Trash2 className="size-2.5" />
-                    Clear chat
-                  </button>
-                )}
-              </div>
-            )}
+              {messages.length > 0 && (
+                <button
+                  onClick={() => setMessages([])}
+                  className="flex items-center gap-1 h-6 px-2.5 rounded-lg text-[10px] text-white/20 hover:text-red-400/70 hover:bg-red-400/8 border border-transparent hover:border-red-400/15 transition-all"
+                >
+                  <Trash2 className="size-2.5" />
+                  Clear chat
+                </button>
+              )}
+            </div>
 
             {/* Main input */}
             <div className={`flex items-end bg-[#0d0d0d] rounded-2xl border transition-colors ${
