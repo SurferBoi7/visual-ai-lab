@@ -273,7 +273,7 @@ export default function App() {
     textWorkerRef.current?.postMessage({
       type: "reset",
       opts: {
-        corpus: llmConfig.corpus,
+        corpus: effectiveCorpus,
         contextSize: llmConfig.contextSize,
         hiddenSize: llmConfig.hiddenSize,
         learningRate: llmConfig.learningRate,
@@ -417,7 +417,7 @@ export default function App() {
     textWorkerRef.current?.postMessage({
       type: "reset",
       opts: {
-        corpus: llmConfig.corpus,
+        corpus: effectiveCorpus,
         contextSize: llmConfig.contextSize,
         hiddenSize: llmConfig.hiddenSize,
         learningRate: llmConfig.learningRate,
@@ -524,6 +524,16 @@ export default function App() {
   const llmModeTag = llmConfig.tokenization === "word" ? "Word-LM" : "Char-LM";
   const llmModelLabel = `${llmModeTag} · ${llmConfig.contextSize}→${llmConfig.hiddenSize}→${textSnap.vocabSize}`;
   const llmModels = savedModels.filter((m) => m.type !== "MLP");
+
+  // Effective corpus — merges active datasets and applies token importance
+  // ranking when the Automated Data Feeder is enabled. This is what gets
+  // sent to the worker on rebuild/init; the underlying math is unchanged.
+  const effectiveCorpus = useMemo(() => {
+    if (!feederEnabled) return llmConfig.corpus;
+    const active = datasets.filter((d) => d.active).map((d) => d.text).join("\n");
+    const base = active.length > 0 ? active : llmConfig.corpus;
+    return tokenRankingEnabled ? tokenImportanceRank(base) : base;
+  }, [feederEnabled, tokenRankingEnabled, datasets, llmConfig.corpus]);
 
   const viewTitle = tab === "chat" ? "Chat Studio" : tab === "train" ? "Training Lab" : "Deploy Hub";
 
@@ -760,7 +770,7 @@ export default function App() {
                         <label className="text-[11px] text-white/32 font-medium">Hidden Neurons</label>
                         <span className="text-[11px] tabular-nums text-white/58 font-mono">{llmConfig.hiddenSize}</span>
                       </div>
-                      <Slider min={4} max={512} step={4} value={[llmConfig.hiddenSize]} onValueChange={([v]) => setLLMConfig((c) => ({ ...c, hiddenSize: v }))} className="py-2" />
+                      <Slider min={4} max={1024} step={8} value={[llmConfig.hiddenSize]} onValueChange={([v]) => setLLMConfig((c) => ({ ...c, hiddenSize: v }))} className="py-2" />
                     </div>
 
                     {/* Learning rate slider */}
@@ -825,7 +835,7 @@ export default function App() {
                         />
                         <SliderRow
                           label="Hidden Neurons" display={String(llmConfig.hiddenSize)}
-                          value={llmConfig.hiddenSize} min={4} max={512} step={4}
+                          value={llmConfig.hiddenSize} min={4} max={1024} step={8}
                           onChange={(v) => setLLMConfig((c) => ({ ...c, hiddenSize: v }))}
                         />
                         <SliderRow
@@ -1289,70 +1299,110 @@ function SparkLine({ data }: { data: number[] }) {
 }
 
 function MatrixPulseCore({ active }: { active: boolean }) {
-  const W = 400, H = 186;
-  const xs = [55, 153, 247, 345];
+  const W = 520, H = 196;
+  const LABEL_H = 22;
+  const xs = [65, 185, 335, 455];
   const ys: number[][] = [
-    [43, 100, 157],
-    [18, 58, 100, 142, 182],
-    [18, 58, 100, 142, 182],
-    [43, 100, 157],
+    [33, 98, 163],
+    [10, 55, 98, 141, 186],
+    [10, 55, 98, 141, 186],
+    [33, 98, 163],
   ];
+  const layerLabels = ["INPUT", "HIDDEN L1", "HIDDEN L2", "OUTPUT"];
 
-  type Edge = { x1: number; y1: number; x2: number; y2: number; delay: string };
-  const edges: Edge[] = [];
+  type PathDef = { d: string; fwdDelay: string; bwdDelay: string; fwdDur: string; bwdDur: string };
+  const pathDefs: PathDef[] = [];
   for (let l = 0; l < 3; l++) {
+    const mx = (xs[l] + xs[l + 1]) / 2;
     for (let a = 0; a < ys[l].length; a++) {
       for (let b = 0; b < ys[l + 1].length; b++) {
-        edges.push({
-          x1: xs[l], y1: ys[l][a],
-          x2: xs[l + 1], y2: ys[l + 1][b],
-          delay: `${((a * 0.14 + b * 0.07 + l * 0.28) % 2.0).toFixed(2)}s`,
+        const d = `M ${xs[l]},${ys[l][a]} C ${mx},${ys[l][a]} ${mx},${ys[l + 1][b]} ${xs[l + 1]},${ys[l + 1][b]}`;
+        const seed = a * 0.11 + b * 0.07 + l * 0.26;
+        pathDefs.push({
+          d,
+          fwdDelay: `${(seed % 1.3).toFixed(2)}s`,
+          bwdDelay: `${((seed + 0.35) % 1.6).toFixed(2)}s`,
+          fwdDur: `${(0.85 + (seed % 0.45)).toFixed(2)}s`,
+          bwdDur: `${(1.4 + (seed % 0.55)).toFixed(2)}s`,
         });
       }
     }
   }
 
-  type Node = { x: number; y: number; outer: boolean; delay: string };
-  const nodes: Node[] = [];
+  type NodeDef = { x: number; y: number; isIO: boolean; delay: string };
+  const nodeDefs: NodeDef[] = [];
   ys.forEach((layer, l) => {
     layer.forEach((y, i) => {
-      nodes.push({
+      nodeDefs.push({
         x: xs[l], y,
-        outer: l === 0 || l === 3,
-        delay: `${((l * 0.34 + i * 0.11) % 1.8).toFixed(2)}s`,
+        isIO: l === 0 || l === 3,
+        delay: `${((l * 0.32 + i * 0.10) % 1.6).toFixed(2)}s`,
       });
     });
   });
 
   return (
-    <div style={{ width: "100%", height: H }}>
-      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`}>
-        {edges.map((e, i) => (
-          <line
-            key={i}
-            x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
-            stroke={active ? "rgba(10,132,255,0.18)" : "rgba(255,255,255,0.028)"}
-            strokeWidth={0.65}
-            style={active ? { animation: `edge-pulse 2.2s ease-in-out infinite ${e.delay}` } : {}}
-          />
+    <div style={{ width: "100%", height: H + LABEL_H }}>
+      <svg width="100%" height={H + LABEL_H} viewBox={`0 0 ${W} ${H + LABEL_H}`}>
+        {/* Blueprint column guides */}
+        {xs.map((x, i) => (
+          <line key={`g-${i}`} x1={x} y1={0} x2={x} y2={H}
+            stroke="rgba(255,255,255,0.022)" strokeWidth={0.5} strokeDasharray="2 8" />
         ))}
-        {nodes.map((n, i) => (
-          <circle
-            key={i}
+
+        {/* Connection paths */}
+        {pathDefs.map((p, i) =>
+          active ? (
+            <g key={i}>
+              <path d={p.d} fill="none" stroke="rgba(10,132,255,0.10)" strokeWidth={0.7} />
+              <path d={p.d} fill="none"
+                stroke="rgba(10,132,255,0.80)" strokeWidth={1.3}
+                strokeDasharray="4 14"
+                style={{ animation: `flow-fwd ${p.fwdDur} linear infinite ${p.fwdDelay}` }}
+              />
+              <path d={p.d} fill="none"
+                stroke="rgba(255,159,10,0.38)" strokeWidth={0.9}
+                strokeDasharray="2 18"
+                style={{ animation: `flow-bwd ${p.bwdDur} linear infinite ${p.bwdDelay}` }}
+              />
+            </g>
+          ) : (
+            <path key={i} d={p.d} fill="none" stroke="rgba(255,255,255,0.028)" strokeWidth={0.6} />
+          )
+        )}
+
+        {/* Nodes */}
+        {nodeDefs.map((n, i) => (
+          <circle key={i}
             cx={n.x} cy={n.y}
-            r={n.outer ? 7 : 5}
+            r={n.isIO ? 8 : 5.5}
             fill={active
-              ? n.outer ? "rgba(10,132,255,0.22)" : "rgba(10,132,255,0.10)"
+              ? n.isIO ? "rgba(10,132,255,0.28)" : "rgba(10,132,255,0.12)"
               : "rgba(255,255,255,0.04)"}
             stroke={active
-              ? n.outer ? "rgba(10,132,255,0.70)" : "rgba(10,132,255,0.32)"
-              : "rgba(255,255,255,0.07)"}
-            strokeWidth={1}
+              ? n.isIO ? "rgba(10,132,255,0.92)" : "rgba(10,132,255,0.44)"
+              : "rgba(255,255,255,0.08)"}
+            strokeWidth={n.isIO ? 1.5 : 1}
             style={active ? {
               animation: `node-pulse 1.8s ease-in-out infinite ${n.delay}`,
-              filter: n.outer ? "drop-shadow(0 0 4px rgba(10,132,255,0.45))" : undefined,
+              filter: n.isIO ? "drop-shadow(0 0 5px rgba(10,132,255,0.65))" : undefined,
             } : {}}
           />
+        ))}
+
+        {/* Layer labels */}
+        {xs.map((x, i) => (
+          <text key={`lbl-${i}`}
+            x={x} y={H + 15}
+            textAnchor="middle"
+            fontSize={7.5}
+            fontFamily="ui-monospace,monospace"
+            letterSpacing="0.12em"
+            fontWeight="600"
+            fill={active ? "rgba(10,132,255,0.52)" : "rgba(255,255,255,0.14)"}
+          >
+            {layerLabels[i]}
+          </text>
         ))}
       </svg>
     </div>

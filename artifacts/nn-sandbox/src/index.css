@@ -299,3 +299,11 @@
   0%, 100% { opacity: 0.04; }
   50% { opacity: 0.28; }
 }
+
+@keyframes flow-fwd {
+  to { stroke-dashoffset: -18; }
+}
+
+@keyframes flow-bwd {
+  to { stroke-dashoffset: 18; }
+}

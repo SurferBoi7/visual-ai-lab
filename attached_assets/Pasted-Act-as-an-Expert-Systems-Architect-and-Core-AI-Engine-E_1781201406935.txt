@@ -1,0 +1,24 @@
+Act as an Expert Systems Architect and Core AI Engine Engineer. We are fixing a critical synchronization gap: the UI displays 50M parameter labels, but the underlying slider arrays and active worker threads are still computationally throttled or bounded by old structural limits, and legacy export panels are lingering. 
+
+Your prime directive: You must explicitly re-wire the state sliders, the Automated Feeder pipeline, and WebGPU indicator logic so they are fully functional inside the core training loop, not just visual placeholders.
+
+Please apply the following definitive changes across App.tsx, text.worker.ts, and related sub-views:
+
+### 1. Synchronize the 50M Parameter Engine
+* **The Slider Configuration:** Track down the maximum bounding values for the Hidden Layers and Embeddings dimensions. Ensure that adjusting the sliders recalculates the total network size metric up to exactly 50,000,000 parameters.
+* **Array Memory Allocation Guard:** When a user sets a large parameter configuration and clicks "Apply", dynamically calculate array dimensions. To prevent your Intel Mac from crashing the browser tab, initialize these matrices as low-overhead typed arrays (e.g., Float32Array or Int8Array) passed directly into the training loop configuration object.
+
+### 2. Functional Automated Data Feeder & Streamer
+* **The Processing Logic:** The "Automated Data Feeder" toggle must not be a dummy switch. Link its boolean state directly to the training token generator loop.
+* **The Low-Memory Stream:** When active, configure it to read data line-by-line from the active source text corpus. It must dynamically batch these micro-segments, pass them to the worker thread as an ephemeral training buffer, and immediately evict them from the main thread's memory heap upon confirmation of the backpropagation step.
+* **Importance Ranking:** Ensure the vocab-density filtering logic actively drops redundant low-scoring text sentences before they strike the worker pipeline, saving valuable computing cycles.
+
+### 3. High-Fidelity Network Matrix Visualization
+* **The Redesign:** Completely replace the glowing central orb animation on the Training Status panel with an immersive, complex SVG Matrix Pipeline Visualizer.
+* **The Behavior:** Construct a multi-layered node layout mapping the 50M architecture (Input tokens → Matrix Layer 1 → Matrix Layer 2 → Output Logits). When training is active, use cascading CSS strokes (`stroke-dashoffset` keyframes) to show particles traveling down data-paths along with pulsing connection points to visually represent backward and forward propagation passes. When idle, the network drops to a static, structural blueprint look.
+
+### 4. Hard Purge of Residual UI & WebGPU Verification
+* **Legacy Sweep:** Double-check the bottom of the training pane view file. Absolutely delete any leftover export fields, JSON saving buttons, or legacy blocks still rendering below the main dual-column control panel layout. 
+* **WebGPU Check:** Ensure the header status check performs a true asynchronous handshake with `await navigator.gpu?.requestAdapter()`. If valid, light up the badge to green "[WebGPU Acceleration Active]"; otherwise, safely fall back to the CPU thread layout without breaking the workspace.
+
+Recompile the platform cleanly. Verify all state updates pass strict type checks and that metrics (Loss, Tokens/Sec, Epochs) run natively on screen when the data streamer is actively feeding training inputs.
