@@ -1,0 +1,29 @@
+Act as an Elite UI/UX Engineer and Senior Front-End Architect. We are cleaning up the "Tiny AI Foundry" workspace to remove legacy visual clutter, fix component overlap, and ensure strict layout constraints.
+
+Your prime directive: DO NOT change the underlying network math or matrix calculations inside the background workers. You are modifying layouts and removing dead UI remnants within App.tsx and related view files.
+
+Please execute the following absolute cleanup and updates:
+
+### 1. Hard Purge of Legacy Elements (Fixing Overlap Bug)
+* **Wipe Duplicate Telemetry:** Locate the code area rendering underneath our new dual-column layout. Completely remove all legacy output blocks, historical graph panels, sharing hubs, or `LLMStats`/`MLPOutput` fragments that bleed out underneath the main panel structure.
+* **Remove Old Data Upload UI:** Delete the legacy dataset preparation sections, text drop zones, and unstyled raw upload panels that appear below the left Control Matrix. The layout must end cleanly at the bottom of the dual-column grid.
+
+### 2. Parameter Ceiling Expansion (Scale up to 50M)
+* Locate the hidden size/parameter calculation variables and sliders inside the configuration workspace.
+* Change the maximum upper bounds of the parameters from 500,000 to **50,000,000 (50M)**.
+* Scale the step size adjustments cleanly so the slider can comfortably sweep from small counts up to the full 50M limit without throwing execution range errors.
+
+### 3. Strict Non-Scrollable Layout Enforcements
+* Lock down the main view container heights using strict layout bounds (like `h-screen`, `max-h-screen`, or full flex-box height matching the application shell).
+* The layout grid must remain perfectly proportioned and non-scrollable as a whole, keeping controls on the left and tracking telemetry metrics on the right fixed in place on the screen. 
+* Add new high-end live stats inside the right panel telemetry matrix if space permits (such as: VRAM/RAM estimated overhead, token variety index, or context saturation percentage).
+
+### 4. Chat Matrix Fine-Tuning
+* Confirm the Chat layout is clean, responsive, and handles independent messaging histories cleanly.
+* Ensure the active session controls work seamlessly:
+  1. "+ Launch New Session" (instantly adds an entry)
+  2. "Delete Session" (safely sweeps the row from state)
+  3. "Clear Current Session" (flushes messages array)
+* Verify the inline model selection dropdown pulls directly from the `savedModelsLibrary` with zero reference leaks or ghost placeholders.
+
+Execute this code deletion and update pass. Ensure the codebase passes a strict TypeScript compilation check with absolutely zero compiler or structural layout layout overlap errors.

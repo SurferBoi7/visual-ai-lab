@@ -970,7 +970,7 @@ export default function App() {
                   </div>
 
                   {/* ════ RIGHT MONITORING PANEL ════════════════════════════ */}
-                  <div className="flex-1 flex flex-col overflow-y-auto bg-[#000000]">
+                  <div className="flex-1 flex flex-col overflow-hidden bg-[#000000]">
 
                   {/* ─── Matrix Pulse Core Visualizer ─────────────────────── */}
                   <div className="shrink-0 px-5 pt-5 pb-2">
@@ -981,11 +981,11 @@ export default function App() {
                   </div>
 
                   {/* ─── Live Telemetry Grid ────────────────────────────────── */}
-                  <div className="shrink-0 px-4 pb-4">
-                    <div className="grid grid-cols-2 gap-2.5">
+                  <div className="shrink-0 px-4 pb-3">
+                    <div className="grid grid-cols-2 gap-2">
                       <TelemetryCard
                         label="Global Loss"
-                        value={textSnap.loss > 0 ? textSnap.loss.toFixed(5) : "—"}
+                        value={textSnap.loss > 0 ? textSnap.loss.toFixed(4) : "—"}
                         sub={lossHistory.length > 3
                           ? (lossHistory[lossHistory.length - 1] < lossHistory[0] ? "↓ converging" : "→ stable")
                           : "awaiting data"}
@@ -1005,7 +1005,7 @@ export default function App() {
                       />
 
                       <TelemetryCard
-                        label="Processing Speed"
+                        label="Throughput"
                         value={textSnap.tokensPerSecond > 0
                           ? textSnap.tokensPerSecond > 1000
                             ? `${(textSnap.tokensPerSecond / 1000).toFixed(1)}k`
@@ -1016,11 +1016,25 @@ export default function App() {
                       />
 
                       <TelemetryCard
-                        label="Memory Footprint"
+                        label="RAM Overhead"
                         value={textSnap.paramCount > 0
-                          ? `${((textSnap.paramCount * 4 * 2) / (1024 * 1024)).toFixed(2)} MB`
+                          ? `${((textSnap.paramCount * 4 * 2) / (1024 * 1024)).toFixed(1)} MB`
                           : "—"}
                         sub={textSnap.paramCount > 0 ? `${textSnap.paramCount.toLocaleString()} params` : "—"}
+                        active={llmPlaying}
+                      />
+
+                      <TelemetryCard
+                        label="Vocab Coverage"
+                        value={textSnap.vocabSize > 0 ? String(textSnap.vocabSize) : "—"}
+                        sub={textSnap.vocabSize > 0 ? "unique token types" : "awaiting data"}
+                        active={llmPlaying}
+                      />
+
+                      <TelemetryCard
+                        label="Bits / Char"
+                        value={textSnap.loss > 0 ? (textSnap.loss / Math.LN2).toFixed(3) : "—"}
+                        sub="cross-entropy bits"
                         active={llmPlaying}
                       />
                     </div>
@@ -1037,25 +1051,6 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* ─── LLMStats ───────────────────────────────────────────── */}
-                  {llmHasModel && (
-                    <div className="shrink-0 px-4 pb-6">
-                      <LLMStats
-                        modelLabel={llmModelLabel}
-                        epoch={textSnap.epoch}
-                        loss={textSnap.loss}
-                        paramCount={textSnap.paramCount}
-                        vocabSize={textSnap.vocabSize}
-                        contextSize={textSnap.contextSize}
-                        hiddenSize={textSnap.hiddenSize}
-                        tokensPerSecond={textSnap.tokensPerSecond}
-                        trainedSamples={textSnap.trainedSamples}
-                        messageCount={messages.length}
-                        liveSample={textSnap.sample}
-                        tokenization={llmConfig.tokenization}
-                      />
-                    </div>
-                  )}
                   </div>
                 </div>
               )}
