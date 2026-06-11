@@ -1,0 +1,35 @@
+Act as a Principal Platform Architect and Senior AI Infrastructure Engineer. We are upgrading our system into an enterprise-grade AI Laboratory Suite (reminiscent of internal tools at OpenAI or Anthropic). 
+
+Your prime directive: Completely replace the fragile elements of the old UI. Restructure the Training Lab and Chat views into a unified, high-performance console optimized for WebGPU pipelines and memory-thrifty 50-Million parameter model training runs on hardware with limited resources. Do not alter raw tensor mathematical workers unless optimizing message bindings.
+
+Please implement this complete platform refactor:
+
+### 1. Unified Telemetry Pipeline & Training Lab Redesign
+* **The Interface Setup:** Strip the old tabs. Replace the Training view with an immersive, double-column engineering layout.
+  - **Left Navigation Control (Fixed Panel):** Architecture setup (Sliders up to 50M parameters, layers, context window length), and the new "Automated Feed Streamer" control panel.
+  - **Right Analytics Control (Expanded Panel):** A permanent, high-fidelity monitoring screen.
+* **Telemetry System:** Create a robust listener loop for background metrics. When training begins, activate a premium "Matrix Pulse Core" visualizer (a high-end CSS-animated node configuration displaying structural processing states) directly alongside real-time metrics trackers:
+  - Global Loss Score (Digital readout + moving trend tracking)
+  - Current Epoch & Global Sample Counter
+  - Processing Speed (Tokens Trained per second)
+  - Memory Footprint (Calculated allocation footprint of the active 50M profile)
+* Ensure all telemetry fields fall back gracefully to a static "System Idle" baseline dashboard state when training is paused, preserving data fields cleanly without losing your previous training results.
+
+### 2. The Automated Data Ranker/Feeder
+* Implement the core logic for an active "Automated Data Feeder" inside your corpus pipelines. 
+* This utility must stream files line-by-line or paragraph-by-paragraph instead of jamming full files into browser memory.
+* Add an automatic data pre-processor pipeline toggle: "Enable Token Importance Ranking". When active, simulate a low-memory semantic ranker that score-filters corpus items based on vocabulary density and contextual variety before uploading them to the active training pipeline, ensuring only high-utility data trains your 50M model framework.
+
+### 3. Immersive Chat Matrix (Multi-Thread Workspace)
+* **The Multi-Chat Sidebar:** Upgrade `ChatView.tsx` to handle true concurrent conversational threads. Maintain a structured state tracking multiple sessions: `chats: Array<{ id: string, name: string, messages: Array<any>, modelId: string }>`.
+* Add interactive buttons inside this dedicated history sidebar to:
+  1. "+ Launch New Session" (Creates a separate thread tracking a fresh conversation)
+  2. "Delete Session" (Removes an entry cleanly from state)
+  3. "Clear Current Session" (Wipes messages within the active conversation index)
+* **Model Dropdown Binding:** Position a clean, custom model drop-down element inline next to the bottom message input area. If `savedModelsLibrary` is empty, render it as an inactive, grayed-out badge reading "No Profiles Configured" to protect your worker threads from null-pointer loading errors.
+
+### 4. WebGPU Structural Architecture Preparation
+* Inject structural bindings into the initialization layer (`text.worker.ts` or corresponding network configurations) to check for native hardware capability: `navigator.gpu`. 
+* Present a subtle, premium status indicator panel badge inside the dashboard reading: "[WebGPU Acceleration Engine Active]" if available, falling back to "[Optimized Parallel Thread Core]" if utilizing CPU threads.
+
+Ensure all component configurations conform to a strict, borderless matte aesthetic using deep dark panels (`#000000` to `#0B0B0C`), thin modern divider hairlines (`border-white/5`), clear system typography, and a vivid primary accent (`#0A84FF`). Verify all state variables persist cleanly via localStorage where required.

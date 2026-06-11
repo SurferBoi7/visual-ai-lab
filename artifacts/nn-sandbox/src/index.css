@@ -289,3 +289,13 @@
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.1); }
 }
+
+@keyframes node-pulse {
+  0%, 100% { opacity: 0.18; }
+  50% { opacity: 1; }
+}
+
+@keyframes edge-pulse {
+  0%, 100% { opacity: 0.04; }
+  50% { opacity: 0.28; }
+}

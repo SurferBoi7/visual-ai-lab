@@ -1,0 +1,1 @@
+- [Tiny AI Foundry architecture](tiny-ai-foundry.md) — Training Lab dual-column layout, MatrixPulseCore SVG animation, multi-thread ChatView internal state pattern.

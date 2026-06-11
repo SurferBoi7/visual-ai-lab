@@ -14,7 +14,9 @@ import {
   Cpu,
   Database,
   Activity,
-  ScrollText,
+  Layers,
+  Monitor,
+  Server,
 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import { Toaster } from "@/components/ui/toaster";
@@ -41,7 +43,6 @@ import { tokenize, type Tokenization } from "@/lib/textnet";
 
 type TabKey = "chat" | "train" | "deploy";
 type TrainStep = "fleet" | "setup" | "training";
-type TrainTab = "arch" | "dataset" | "explorer" | "status";
 
 interface TextSnapshot {
   epoch: number;
@@ -55,7 +56,7 @@ interface TextSnapshot {
   trainedSamples: number;
 }
 
-const MAX_PARAMS_LLM = 5_000_000;
+const MAX_PARAMS_LLM = 50_000_000;
 
 const DEFAULT_CORPUS = [
   "User: hello",
@@ -117,6 +118,23 @@ function vocabSizeFor(corpus: string, mode: Tokenization): number {
   return new Set(tokenize(normalized, "word")).size;
 }
 
+function tokenImportanceRank(corpus: string, keepFraction = 0.8): string {
+  const lines = corpus.split("\n").filter((l) => l.trim());
+  if (lines.length === 0) return corpus;
+  const scored = lines.map((line) => {
+    const words = line.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(Boolean);
+    if (words.length === 0) return { line, score: 0 };
+    const density = new Set(words).size / words.length;
+    let bigrams = 0;
+    for (let i = 0; i < words.length - 1; i++) bigrams++;
+    const variety = bigrams > 0 ? new Set(Array.from({ length: bigrams }, (_, i) => `${words[i]}_${words[i + 1]}`)).size / bigrams : 0;
+    return { line, score: density * 0.6 + variety * 0.4 };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  const keep = Math.max(1, Math.ceil(scored.length * keepFraction));
+  return scored.slice(0, keep).map((s) => s.line).join("\n") + "\n";
+}
+
 function slug(s: string): string {
   return (
     s
@@ -168,9 +186,13 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false);
 
   // ── Navigation state ───────────────────────────────────────────────────────
+  const [webGpuAvailable, setWebGpuAvailable] = useState<boolean | null>(null);
+  const [feederEnabled, setFeederEnabled] = useState(false);
+  const [tokenRankingEnabled, setTokenRankingEnabled] = useState(false);
+  const [lossHistory, setLossHistory] = useState<number[]>([]);
+
   const [tab, setTab] = useState<TabKey>("train");
   const [trainStep, setTrainStep] = useState<TrainStep>("fleet");
-  const [trainTab, setTrainTab] = useState<TrainTab>("status");
   const [newModelName, setNewModelName] = useState("");
   const [saveOpen, setSaveOpen] = useState(false);
   const [libraryRefresh, setLibraryRefresh] = useState(0);
@@ -179,6 +201,17 @@ export default function App() {
   useEffect(() => {
     getModels().then(setSavedModels).catch(() => {});
   }, [libraryRefresh]);
+
+  useEffect(() => {
+    if ("gpu" in navigator) {
+      (navigator as unknown as { gpu: { requestAdapter: () => Promise<unknown> } })
+        .gpu.requestAdapter()
+        .then((a) => setWebGpuAvailable(a !== null))
+        .catch(() => setWebGpuAvailable(false));
+    } else {
+      setWebGpuAvailable(false);
+    }
+  }, []);
 
   // ── LLM worker ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -198,6 +231,12 @@ export default function App() {
           tokensPerSecond: msg.tokensPerSecond,
           trainedSamples: msg.trainedSamples,
         });
+        if (typeof msg.loss === "number" && msg.loss > 0) {
+          setLossHistory((prev) => {
+            const next = [...prev, msg.loss as number];
+            return next.length > 80 ? next.slice(-80) : next;
+          });
+        }
       } else if (msg.type === "generation") {
         const cb = pendingGenRef.current.get(msg.id);
         if (cb) { pendingGenRef.current.delete(msg.id); cb(msg.text); }
@@ -407,7 +446,6 @@ export default function App() {
     // 4. Navigate to Training Dashboard
     setMessages([]);
     setNewModelName("");
-    setTrainTab("status");
     setTrainStep("training");
     toast({ title: "Model created", description: `"${name}" saved to your library.` });
   };
@@ -551,6 +589,15 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {/* WebGPU status badge */}
+            {webGpuAvailable !== null && (
+              <div className="hidden md:flex items-center gap-1.5 h-6 px-2.5 rounded-lg border border-white/[0.05] bg-white/[0.02]">
+                {webGpuAvailable
+                  ? <><Monitor className="size-2.5 text-[#30D158]/70" /><span className="text-[9px] font-medium text-[#30D158]/60 tracking-wide">WebGPU Active</span></>
+                  : <><Server className="size-2.5 text-white/22" /><span className="text-[9px] font-medium text-white/22 tracking-wide">Parallel Thread Core</span></>
+                }
+              </div>
+            )}
             {llmPlaying && (
               <div className="hidden md:flex items-center gap-3 mr-1">
                 <div className="flex items-center gap-1.5">
@@ -616,7 +663,7 @@ export default function App() {
                         <div
                           key={m.id}
                           className="group relative rounded-2xl border border-white/[0.06] bg-[#0d0d0d] hover:bg-[#111111] hover:border-white/[0.10] transition-all cursor-pointer overflow-hidden"
-                          onClick={() => { handleLoadModel(m); setTrainStep("training"); setTrainTab("status"); }}
+                          onClick={() => { handleLoadModel(m); setTrainStep("training"); }}
                         >
                           <div className="p-4">
                             <div className="flex items-start justify-between mb-3">
@@ -747,237 +794,269 @@ export default function App() {
 
               {/* ─── Active Training Dashboard ──────────────────────────────── */}
               {trainStep === "training" && (
-                <div className="h-full flex flex-col overflow-hidden">
+                <div className="h-full flex overflow-hidden">
 
-                  {/* ── Mini-bar navigation + back breadcrumb ─────────────── */}
-                  <div className="shrink-0 border-b border-white/[0.05] bg-[#050505] px-3 flex items-center gap-1 h-11">
-                    <button
-                      onClick={() => setTrainStep("fleet")}
-                      className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-white/25 hover:text-white/55 text-[11px] hover:bg-white/[0.04] transition-all mr-1 border border-transparent hover:border-white/[0.05]"
-                    >
-                      <ArrowLeft className="size-3" />
-                      <span className="hidden sm:inline">Models</span>
-                    </button>
-                    <div className="w-px h-4 bg-white/[0.07] mr-1" />
-                    <MiniBarTab
-                      icon={Cpu}
-                      label="Architecture & Hypers"
-                      active={trainTab === "arch"}
-                      onClick={() => setTrainTab("arch")}
-                    />
-                    <MiniBarTab
-                      icon={Database}
-                      label="Dataset Preparation"
-                      active={trainTab === "dataset"}
-                      onClick={() => setTrainTab("dataset")}
-                    />
-                    <MiniBarTab
-                      icon={ScrollText}
-                      label="Dataset Explorer"
-                      active={trainTab === "explorer"}
-                      onClick={() => setTrainTab("explorer")}
-                    />
-                    <MiniBarTab
-                      icon={Activity}
-                      label="Training Status"
-                      active={trainTab === "status"}
-                      onClick={() => setTrainTab("status")}
-                    />
-                  </div>
+                  {/* ════ LEFT CONTROL PANEL ════════════════════════════════ */}
+                  <div className="w-[268px] shrink-0 border-r border-white/[0.05] bg-[#020202] flex flex-col overflow-hidden">
 
-                  {/* ── Tab: Architecture & Hypers ─────────────────────────── */}
-                  {trainTab === "arch" && (
-                    <div className="flex-1 overflow-y-auto p-4">
-                      <LLMArchitect
-                        config={llmConfig}
-                        onChange={setLLMConfig}
-                        onApply={rebuildLLM}
-                        paramCount={estimatedLLMParams}
-                        vocabSize={Math.max(2, vocabSizeFor(llmConfig.corpus, llmConfig.tokenization))}
-                        maxParams={MAX_PARAMS_LLM}
-                        datasets={datasets}
-                        onDatasetsChange={setDatasets}
-                        section="arch"
-                      />
+                    {/* Panel header */}
+                    <div className="h-11 shrink-0 border-b border-white/[0.05] px-3 flex items-center justify-between">
+                      <button
+                        onClick={() => setTrainStep("fleet")}
+                        className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-white/25 hover:text-white/55 text-[11px] hover:bg-white/[0.04] transition-all border border-transparent hover:border-white/[0.05]"
+                      >
+                        <ArrowLeft className="size-3" />
+                        <span>Models</span>
+                      </button>
+                      <span className="text-[9px] font-medium text-white/18 tracking-[0.16em] uppercase">Control Matrix</span>
                     </div>
-                  )}
 
-                  {/* ── Tab: Dataset Preparation (non-scrollable tools) ────── */}
-                  {trainTab === "dataset" && (
-                    <div className="flex-1 overflow-y-auto p-4">
-                      <LLMArchitect
-                        config={llmConfig}
-                        onChange={setLLMConfig}
-                        onApply={rebuildLLM}
-                        paramCount={estimatedLLMParams}
-                        vocabSize={Math.max(2, vocabSizeFor(llmConfig.corpus, llmConfig.tokenization))}
-                        maxParams={MAX_PARAMS_LLM}
-                        datasets={datasets}
-                        onDatasetsChange={setDatasets}
-                        section="dataset-tools"
-                      />
-                    </div>
-                  )}
-
-                  {/* ── Tab: Dataset Explorer (scrollable rows) ─────────────── */}
-                  {trainTab === "explorer" && (
+                    {/* Scrollable controls */}
                     <div className="flex-1 overflow-y-auto">
-                      <div className="p-4 space-y-3">
+
+                      {/* Model Architecture */}
+                      <div className="px-3 pt-4 pb-4 border-b border-white/[0.04] space-y-3">
+                        <PanelLabel icon={Layers} label="Model Architecture" />
+
+                        <SliderRow
+                          label="Context Window" display={String(llmConfig.contextSize)}
+                          value={llmConfig.contextSize} min={1} max={20} step={1}
+                          onChange={(v) => setLLMConfig((c) => ({ ...c, contextSize: v }))}
+                        />
+                        <SliderRow
+                          label="Hidden Neurons" display={String(llmConfig.hiddenSize)}
+                          value={llmConfig.hiddenSize} min={4} max={512} step={4}
+                          onChange={(v) => setLLMConfig((c) => ({ ...c, hiddenSize: v }))}
+                        />
+                        <SliderRow
+                          label="Learning Rate" display={llmConfig.learningRate.toFixed(3)}
+                          value={llmConfig.learningRate} min={0.005} max={0.5} step={0.005}
+                          onChange={(v) => setLLMConfig((c) => ({ ...c, learningRate: v }))}
+                        />
+                        <SliderRow
+                          label="Temperature" display={llmConfig.temperature.toFixed(2)}
+                          value={llmConfig.temperature} min={0.1} max={2.0} step={0.05}
+                          onChange={(v) => setLLMConfig((c) => ({ ...c, temperature: v }))}
+                        />
+                        <SliderRow
+                          label="Top-K Sampling" display={String(llmConfig.topK)}
+                          value={llmConfig.topK} min={1} max={20} step={1}
+                          onChange={(v) => setLLMConfig((c) => ({ ...c, topK: v }))}
+                        />
+
+                        {/* Tokenization */}
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <ScrollText className="size-4 text-white/35" />
-                            <span className="text-[13px] font-semibold text-white/80">Dataset Explorer</span>
+                          <span className="text-[11px] text-white/32">Tokenization</span>
+                          <div className="flex bg-white/[0.04] rounded-lg border border-white/[0.05] p-0.5 gap-0.5">
+                            {(["char", "word"] as const).map((m) => (
+                              <button
+                                key={m}
+                                onClick={() => setLLMConfig((c) => ({ ...c, tokenization: m }))}
+                                className={`px-2.5 h-5 rounded-md text-[10px] font-medium transition-all ${
+                                  llmConfig.tokenization === m
+                                    ? "bg-[#0A84FF]/18 text-[#0A84FF]/90 border border-[#0A84FF]/20"
+                                    : "text-white/30 hover:text-white/55"
+                                }`}
+                              >
+                                {m}
+                              </button>
+                            ))}
                           </div>
-                          <span className="text-[11px] text-white/28 font-mono tabular-nums">
-                            {datasets.filter((d) => d.active).length}/{datasets.length} active
+                        </div>
+
+                        {/* Param count */}
+                        <div className="flex items-center justify-between rounded-lg bg-[#0a0a0a] border border-white/[0.04] px-2.5 py-1.5">
+                          <span className="text-[10px] text-white/25">Est. Parameters</span>
+                          <span className={`text-[11px] tabular-nums font-mono ${estimatedLLMParams > MAX_PARAMS_LLM ? "text-red-400/80" : "text-white/50"}`}>
+                            {estimatedLLMParams.toLocaleString()}
                           </span>
                         </div>
 
-                        {datasets.length === 0 ? (
-                          <div className="flex flex-col items-center justify-center py-16 gap-3">
-                            <div className="size-12 rounded-xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center">
-                              <Database className="size-5 text-white/15" />
-                            </div>
-                            <div className="text-[13px] text-white/28 text-center">No datasets yet.</div>
-                            <div className="text-[11px] text-white/15 text-center max-w-[200px] leading-relaxed">
-                              Add data via the Dataset Preparation tab.
+                        <button
+                          onClick={rebuildLLM}
+                          className="w-full h-8 rounded-xl border border-white/[0.06] hover:border-[#0A84FF]/22 text-white/35 hover:text-[#0A84FF]/75 text-[11px] font-medium transition-all hover:bg-[#0A84FF]/[0.04] flex items-center justify-center gap-1.5"
+                        >
+                          <RefreshCcw className="size-3" />
+                          Apply Architecture
+                        </button>
+                      </div>
+
+                      {/* Train Speed */}
+                      <div className="px-3 py-4 border-b border-white/[0.04] space-y-3">
+                        <PanelLabel icon={Zap} label="Train Speed" />
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-white/32">Epochs / sec</span>
+                          <span className="text-[11px] tabular-nums text-white/50 font-mono">{llmEpochsPerSecond}</span>
+                        </div>
+                        <Slider min={1} max={60} step={1} value={[llmEpochsPerSecond]} onValueChange={handleLLMSpeed} className="py-1" />
+                      </div>
+
+                      {/* Data Feed Engine */}
+                      <div className="px-3 py-4 border-b border-white/[0.04] space-y-3">
+                        <PanelLabel icon={Database} label="Data Feed Engine" />
+
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-[11px] text-white/55 font-medium">Automated Feeder</div>
+                            <div className="text-[9px] text-white/22 mt-0.5">Stream corpus in epochs</div>
+                          </div>
+                          <ToggleSwitch active={feederEnabled} onChange={setFeederEnabled} />
+                        </div>
+
+                        {feederEnabled && (
+                          <div className="rounded-xl bg-[#0A84FF]/[0.04] border border-[#0A84FF]/10 px-3 py-2.5 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="text-[11px] text-[#0A84FF]/80 font-medium">Token Importance Ranking</div>
+                                <div className="text-[9px] text-[#0A84FF]/40 mt-0.5">
+                                  {tokenRankingEnabled ? "Keeping top 80% by vocab density" : "Score-filter by vocab density"}
+                                </div>
+                              </div>
+                              <ToggleSwitch active={tokenRankingEnabled} onChange={setTokenRankingEnabled} accent />
                             </div>
                           </div>
-                        ) : (
-                          datasets.map((d) => {
-                            const bytes = new Blob([d.text]).size;
-                            const lines = d.text.split("\n").filter((l) => l.trim()).length;
-                            return (
-                              <div
-                                key={d.id}
-                                className={`rounded-2xl border transition-all ${
-                                  d.active
-                                    ? "border-white/[0.07] bg-[#0d0d0d]"
-                                    : "border-white/[0.04] bg-[#080808] opacity-50"
-                                }`}
-                              >
-                                {/* Row header */}
-                                <div className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.04]">
-                                  <span className={`size-2 rounded-full shrink-0 ${d.active ? "bg-[#0A84FF]" : "bg-white/15"}`} />
-                                  <span className="flex-1 text-[12px] font-semibold text-white/75 truncate">{d.name}</span>
-                                  <span className="text-[10px] text-white/22 font-mono tabular-nums shrink-0">
-                                    {lines} lines · {bytes < 1024 ? `${bytes}B` : `${(bytes / 1024).toFixed(1)}KB`}
+                        )}
+
+                        {datasets.length > 0 && (
+                          <div className="space-y-1.5">
+                            <div className="text-[9px] text-white/20 uppercase tracking-[0.12em] font-medium">
+                              Corpus · {datasets.filter((d) => d.active).length}/{datasets.length} active
+                            </div>
+                            {datasets.map((d) => {
+                              const lineCount = d.text.split("\n").filter((l) => l.trim()).length;
+                              const rankedCount = feederEnabled && tokenRankingEnabled
+                                ? tokenImportanceRank(d.text).split("\n").filter((l) => l.trim()).length
+                                : lineCount;
+                              return (
+                                <div
+                                  key={d.id}
+                                  className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 bg-white/[0.02] border border-white/[0.04]"
+                                >
+                                  <button
+                                    onClick={() => setDatasets((prev) => prev.map((x) => x.id === d.id ? { ...x, active: !x.active } : x))}
+                                    className={`size-3.5 rounded-sm border shrink-0 flex items-center justify-center transition-all ${d.active ? "bg-[#0A84FF]/18 border-[#0A84FF]/35" : "border-white/[0.12]"}`}
+                                  >
+                                    {d.active && <span className="size-1.5 rounded-sm bg-[#0A84FF]" />}
+                                  </button>
+                                  <span className={`flex-1 text-[10px] font-medium truncate ${d.active ? "text-white/55" : "text-white/22"}`}>{d.name}</span>
+                                  <span className="text-[9px] text-white/22 tabular-nums font-mono shrink-0">
+                                    {feederEnabled && tokenRankingEnabled && d.active ? `${rankedCount}/${lineCount}` : `${lineCount}L`}
                                   </span>
                                 </div>
-                                {/* Raw text preview */}
-                                <pre className="px-4 py-3 text-[10px] font-mono text-white/30 whitespace-pre-wrap leading-relaxed break-words">
-                                  {d.text.slice(0, 1200)}{d.text.length > 1200 ? "\n…" : ""}
-                                </pre>
-                              </div>
-                            );
-                          })
+                              );
+                            })}
+                          </div>
                         )}
+
+                        <button
+                          onClick={() => setTrainStep("setup")}
+                          className="w-full h-7 rounded-xl border border-dashed border-white/[0.07] hover:border-white/[0.12] text-white/22 hover:text-white/45 text-[10px] font-medium transition-all flex items-center justify-center gap-1.5"
+                        >
+                          <Plus className="size-3" /> Manage Datasets
+                        </button>
                       </div>
+
+                      {/* Library */}
+                      <div className="px-3 py-4 space-y-2">
+                        <PanelLabel icon={Save} label="Library" />
+                        <SharingHub
+                          mode="llm"
+                          onDownload={handleOpenSave}
+                          hasModel={llmHasModel}
+                          onImport={handleImportModel}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ════ RIGHT MONITORING PANEL ════════════════════════════ */}
+                  <div className="flex-1 flex flex-col overflow-y-auto bg-[#000000]">
+
+                  {/* ─── Matrix Pulse Core Visualizer ─────────────────────── */}
+                  <div className="shrink-0 px-5 pt-5 pb-2">
+                    <MatrixPulseCore active={llmPlaying} />
+                    <div className={`text-center text-[9px] font-semibold tracking-[0.22em] uppercase mt-3 ${llmPlaying ? "text-[#0A84FF]/70" : "text-white/15"}`}>
+                      {llmPlaying ? "Active Backpropagation Engine" : "System Idle · Awaiting Input"}
+                    </div>
+                  </div>
+
+                  {/* ─── Live Telemetry Grid ────────────────────────────────── */}
+                  <div className="shrink-0 px-4 pb-4">
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <TelemetryCard
+                        label="Global Loss"
+                        value={textSnap.loss > 0 ? textSnap.loss.toFixed(5) : "—"}
+                        sub={lossHistory.length > 3
+                          ? (lossHistory[lossHistory.length - 1] < lossHistory[0] ? "↓ converging" : "→ stable")
+                          : "awaiting data"}
+                        active={llmPlaying}
+                        accent
+                      >
+                        {lossHistory.length > 3 && <SparkLine data={lossHistory} />}
+                      </TelemetryCard>
+
+                      <TelemetryCard
+                        label="Epoch Counter"
+                        value={textSnap.epoch > 0 ? textSnap.epoch.toLocaleString() : "—"}
+                        sub={textSnap.trainedSamples > 0
+                          ? `${textSnap.trainedSamples > 1000 ? `${(textSnap.trainedSamples / 1000).toFixed(1)}k` : String(textSnap.trainedSamples)} samples`
+                          : "awaiting data"}
+                        active={llmPlaying}
+                      />
+
+                      <TelemetryCard
+                        label="Processing Speed"
+                        value={textSnap.tokensPerSecond > 0
+                          ? textSnap.tokensPerSecond > 1000
+                            ? `${(textSnap.tokensPerSecond / 1000).toFixed(1)}k`
+                            : String(Math.round(textSnap.tokensPerSecond))
+                          : "—"}
+                        sub="tokens / sec"
+                        active={llmPlaying}
+                      />
+
+                      <TelemetryCard
+                        label="Memory Footprint"
+                        value={textSnap.paramCount > 0
+                          ? `${((textSnap.paramCount * 4 * 2) / (1024 * 1024)).toFixed(2)} MB`
+                          : "—"}
+                        sub={textSnap.paramCount > 0 ? `${textSnap.paramCount.toLocaleString()} params` : "—"}
+                        active={llmPlaying}
+                      />
+                    </div>
+                  </div>
+
+                  {/* ─── Live Sample Output ─────────────────────────────────── */}
+                  {textSnap.sample && (
+                    <div className="shrink-0 mx-4 mb-4 rounded-xl bg-[#070707] border border-white/[0.05] px-4 py-3">
+                      <div className="text-[9px] uppercase tracking-[0.12em] text-white/20 mb-2 font-medium flex items-center gap-1.5">
+                        <span className="size-1.5 rounded-full bg-[#30D158] animate-pulse shrink-0" />
+                        Live Sample Output
+                      </div>
+                      <code className="text-[10px] font-mono text-[#30D158]/60 leading-relaxed break-words">{textSnap.sample}</code>
                     </div>
                   )}
 
-                  {/* ── Tab: Training Status ────────────────────────────────── */}
-                  {trainTab === "status" && (
-                    <div className="flex-1 overflow-y-auto">
-                      {/* Backpropagation visualization */}
-                      <div className="flex flex-col items-center justify-center py-10 px-6">
-                        <div className="relative flex items-center justify-center mb-8">
-                          <div className="absolute rounded-full border border-[#0A84FF]/22" style={{ width: 180, height: 180, animation: llmPlaying ? "backprop-ring 2.4s ease-out infinite 0s" : "none", opacity: llmPlaying ? 1 : 0.15 }} />
-                          <div className="absolute rounded-full border border-[#0A84FF]/15" style={{ width: 180, height: 180, animation: llmPlaying ? "backprop-ring 2.4s ease-out infinite 0.8s" : "none", opacity: llmPlaying ? 1 : 0.10 }} />
-                          <div className="absolute rounded-full border border-[#0A84FF]/10" style={{ width: 180, height: 180, animation: llmPlaying ? "backprop-ring 2.4s ease-out infinite 1.6s" : "none", opacity: llmPlaying ? 1 : 0.06 }} />
-                          <div
-                            className={`size-24 rounded-full flex items-center justify-center border ${
-                              llmPlaying
-                                ? "bg-[#0A84FF]/10 border-[#0A84FF]/20 shadow-[0_0_40px_rgba(10,132,255,0.15)]"
-                                : "bg-white/[0.03] border-white/[0.06]"
-                            }`}
-                            style={{ animation: llmPlaying ? "backprop-orb 2s ease-in-out infinite" : "none" }}
-                          >
-                            <Brain className={`size-9 ${llmPlaying ? "text-[#0A84FF]/70" : "text-white/18"}`} />
-                          </div>
-                        </div>
-
-                        <div className={`text-[11px] font-semibold tracking-[0.15em] uppercase mb-6 ${llmPlaying ? "text-[#0A84FF]" : "text-white/22"}`}>
-                          {llmPlaying ? "Active Backpropagation" : "Paused"}
-                        </div>
-
-                        {/* Live telemetry — always visible, updates in real-time from textSnap */}
-                        <div className="bg-[#080808] border border-white/[0.06] rounded-2xl px-6 py-4 flex items-center gap-0 w-full max-w-md">
-                          <MetricCell label="Loss" value={textSnap.loss > 0 ? textSnap.loss.toFixed(4) : "—"} />
-                          <div className="w-px h-10 bg-white/[0.06]" />
-                          <MetricCell label="Epoch" value={textSnap.epoch > 0 ? String(textSnap.epoch) : "—"} />
-                          <div className="w-px h-10 bg-white/[0.06]" />
-                          <MetricCell
-                            label="tok/s"
-                            value={textSnap.tokensPerSecond > 0
-                              ? textSnap.tokensPerSecond > 1000
-                                ? `${(textSnap.tokensPerSecond / 1000).toFixed(1)}k`
-                                : String(Math.round(textSnap.tokensPerSecond))
-                              : "—"}
-                          />
-                          <div className="w-px h-10 bg-white/[0.06]" />
-                          <MetricCell
-                            label="Tokens"
-                            value={textSnap.trainedSamples > 0
-                              ? textSnap.trainedSamples > 1000
-                                ? `${(textSnap.trainedSamples / 1000).toFixed(1)}k`
-                                : String(textSnap.trainedSamples)
-                              : "—"}
-                          />
-                        </div>
-
-                        {textSnap.sample && (
-                          <div className="mt-5 w-full max-w-md rounded-xl bg-[#080808] border border-white/[0.05] px-4 py-3">
-                            <div className="text-[9px] uppercase tracking-[0.12em] text-white/22 mb-2 font-medium">Live Sample</div>
-                            <code className="text-[10px] font-mono text-[#30D158]/55 leading-relaxed break-words">{textSnap.sample}</code>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Train speed */}
-                      <div className="px-4 pb-5 max-w-md mx-auto">
-                        <div className="rounded-2xl border border-white/[0.05] bg-[#080808] p-4 space-y-3">
-                          <div className="flex items-center gap-2">
-                            <Zap className="size-4 text-amber-400" />
-                            <span className="text-[12px] font-semibold text-white/72">Train Speed</span>
-                          </div>
-                          <div className="space-y-2">
-                            <div className="flex justify-between">
-                              <span className="text-[11px] text-white/30">Epochs / sec</span>
-                              <span className="text-[11px] tabular-nums text-white/60 font-mono">{llmEpochsPerSecond}</span>
-                            </div>
-                            <Slider min={1} max={60} step={1} value={[llmEpochsPerSecond]} onValueChange={handleLLMSpeed} className="py-2" />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Stats & sharing */}
-                      {llmHasModel && (
-                        <div className="px-4 pb-6 space-y-4 max-w-md mx-auto">
-                          <LLMStats
-                            modelLabel={llmModelLabel}
-                            epoch={textSnap.epoch}
-                            loss={textSnap.loss}
-                            paramCount={textSnap.paramCount}
-                            vocabSize={textSnap.vocabSize}
-                            contextSize={textSnap.contextSize}
-                            hiddenSize={textSnap.hiddenSize}
-                            tokensPerSecond={textSnap.tokensPerSecond}
-                            trainedSamples={textSnap.trainedSamples}
-                            messageCount={messages.length}
-                            liveSample={textSnap.sample}
-                            tokenization={llmConfig.tokenization}
-                          />
-                          <SharingHub
-                            mode="llm"
-                            onDownload={handleOpenSave}
-                            hasModel={llmHasModel}
-                            onImport={handleImportModel}
-                          />
-                        </div>
-                      )}
+                  {/* ─── LLMStats ───────────────────────────────────────────── */}
+                  {llmHasModel && (
+                    <div className="shrink-0 px-4 pb-6">
+                      <LLMStats
+                        modelLabel={llmModelLabel}
+                        epoch={textSnap.epoch}
+                        loss={textSnap.loss}
+                        paramCount={textSnap.paramCount}
+                        vocabSize={textSnap.vocabSize}
+                        contextSize={textSnap.contextSize}
+                        hiddenSize={textSnap.hiddenSize}
+                        tokensPerSecond={textSnap.tokensPerSecond}
+                        trainedSamples={textSnap.trainedSamples}
+                        messageCount={messages.length}
+                        liveSample={textSnap.sample}
+                        tokenization={llmConfig.tokenization}
+                      />
                     </div>
                   )}
+                  </div>
                 </div>
               )}
 
@@ -1090,37 +1169,197 @@ function SlimNavItem({
   );
 }
 
-function MiniBarTab({
+function PanelLabel({
   icon: Icon,
   label,
-  active,
-  onClick,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 pb-0.5">
+      <Icon className="size-3 text-white/22 shrink-0" />
+      <span className="text-[9px] font-semibold text-white/22 tracking-[0.14em] uppercase">{label}</span>
+    </div>
+  );
+}
+
+function SliderRow({
+  label,
+  value,
+  min,
+  max,
+  step,
+  display,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  display?: string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] text-white/32">{label}</span>
+        <span className="text-[11px] tabular-nums font-mono text-white/50">{display ?? String(value)}</span>
+      </div>
+      <Slider min={min} max={max} step={step} value={[value]} onValueChange={([v]) => onChange(v)} className="py-0.5" />
+    </div>
+  );
+}
+
+function ToggleSwitch({
+  active,
+  onChange,
+}: {
   active: boolean;
-  onClick: () => void;
+  onChange: (v: boolean) => void;
+  accent?: boolean;
 }) {
   return (
     <button
-      onClick={onClick}
-      className={`flex items-center gap-1.5 h-8 px-3 rounded-lg text-[11px] font-medium transition-all ${
-        active
-          ? "bg-[#0A84FF]/12 text-[#0A84FF] border border-[#0A84FF]/18"
-          : "text-white/30 hover:text-white/62 hover:bg-white/[0.04] border border-transparent"
+      onClick={() => onChange(!active)}
+      className={`relative w-[34px] h-5 rounded-full border transition-all shrink-0 ${
+        active ? "bg-[#0A84FF] border-[#0A84FF]/50" : "bg-white/[0.05] border-white/[0.10]"
       }`}
     >
-      <Icon className="size-3.5 shrink-0" />
-      <span className="hidden sm:inline">{label}</span>
+      <span
+        className="absolute top-[3px] size-[14px] rounded-full bg-white shadow-sm transition-transform"
+        style={{ left: active ? "calc(100% - 17px)" : "3px" }}
+      />
     </button>
   );
 }
 
-function MetricCell({ label, value }: { label: string; value: string }) {
+function TelemetryCard({
+  label,
+  value,
+  sub,
+  active,
+  accent = false,
+  children,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  active?: boolean;
+  accent?: boolean;
+  children?: React.ReactNode;
+}) {
   return (
-    <div className="text-center flex-1">
-      <div className="text-[9px] uppercase tracking-[0.12em] text-white/22 mb-1.5 font-medium">{label}</div>
-      <div className="text-xl font-bold tabular-nums text-white">{value}</div>
+    <div
+      className={`rounded-2xl border p-3.5 flex flex-col gap-1.5 ${
+        active && accent ? "bg-[#0A84FF]/[0.05] border-[#0A84FF]/14" : "bg-[#080808] border-white/[0.05]"
+      }`}
+    >
+      <div className="text-[9px] uppercase tracking-[0.12em] text-white/22 font-medium">{label}</div>
+      <div
+        className={`text-[22px] font-bold tabular-nums font-mono leading-none ${
+          active && accent ? "text-[#0A84FF]/90" : "text-white/85"
+        }`}
+      >
+        {value}
+      </div>
+      {children}
+      {sub && <div className="text-[9px] text-white/22 font-mono">{sub}</div>}
+    </div>
+  );
+}
+
+function SparkLine({ data }: { data: number[] }) {
+  if (data.length < 2) return null;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const W = 120, H = 22;
+  const pts = data
+    .map((v, i) => `${(i / (data.length - 1)) * W},${H - ((v - min) / range) * H}`)
+    .join(" ");
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="my-0.5">
+      <polyline
+        points={pts}
+        fill="none"
+        stroke="rgba(10,132,255,0.45)"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function MatrixPulseCore({ active }: { active: boolean }) {
+  const W = 400, H = 186;
+  const xs = [55, 153, 247, 345];
+  const ys: number[][] = [
+    [43, 100, 157],
+    [18, 58, 100, 142, 182],
+    [18, 58, 100, 142, 182],
+    [43, 100, 157],
+  ];
+
+  type Edge = { x1: number; y1: number; x2: number; y2: number; delay: string };
+  const edges: Edge[] = [];
+  for (let l = 0; l < 3; l++) {
+    for (let a = 0; a < ys[l].length; a++) {
+      for (let b = 0; b < ys[l + 1].length; b++) {
+        edges.push({
+          x1: xs[l], y1: ys[l][a],
+          x2: xs[l + 1], y2: ys[l + 1][b],
+          delay: `${((a * 0.14 + b * 0.07 + l * 0.28) % 2.0).toFixed(2)}s`,
+        });
+      }
+    }
+  }
+
+  type Node = { x: number; y: number; outer: boolean; delay: string };
+  const nodes: Node[] = [];
+  ys.forEach((layer, l) => {
+    layer.forEach((y, i) => {
+      nodes.push({
+        x: xs[l], y,
+        outer: l === 0 || l === 3,
+        delay: `${((l * 0.34 + i * 0.11) % 1.8).toFixed(2)}s`,
+      });
+    });
+  });
+
+  return (
+    <div style={{ width: "100%", height: H }}>
+      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`}>
+        {edges.map((e, i) => (
+          <line
+            key={i}
+            x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+            stroke={active ? "rgba(10,132,255,0.18)" : "rgba(255,255,255,0.028)"}
+            strokeWidth={0.65}
+            style={active ? { animation: `edge-pulse 2.2s ease-in-out infinite ${e.delay}` } : {}}
+          />
+        ))}
+        {nodes.map((n, i) => (
+          <circle
+            key={i}
+            cx={n.x} cy={n.y}
+            r={n.outer ? 7 : 5}
+            fill={active
+              ? n.outer ? "rgba(10,132,255,0.22)" : "rgba(10,132,255,0.10)"
+              : "rgba(255,255,255,0.04)"}
+            stroke={active
+              ? n.outer ? "rgba(10,132,255,0.70)" : "rgba(10,132,255,0.32)"
+              : "rgba(255,255,255,0.07)"}
+            strokeWidth={1}
+            style={active ? {
+              animation: `node-pulse 1.8s ease-in-out infinite ${n.delay}`,
+              filter: n.outer ? "drop-shadow(0 0 4px rgba(10,132,255,0.45))" : undefined,
+            } : {}}
+          />
+        ))}
+      </svg>
     </div>
   );
 }
