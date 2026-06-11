@@ -1,0 +1,32 @@
+Act as a Principal Software Architect and Core Systems Engineer. We are performing an immediate, sweeping structural overhaul of our parameters engine, purging residual sidebar artifacts, and introducing an interactive Autonomous Data Compiler to give the user absolute visibility over training injection.
+
+DO NOT alter core backpropagation mathematical functions in textnet.ts unless updating architectural matrix capacity parameters. 
+
+Please execute the following platform updates:
+
+### 1. Hard Purge & Redesign of Left Sidebar
+* Completely rewrite the Left Sidebar layout component. 
+* Permanently delete the stubborn, legacy export and share options sitting below the controls. 
+* The sidebar space must be cleanly arranged into exactly three fixed sections:
+  1. [Hyperparameter Architecture Matrix] (Dials and sliders)
+  2. [Engine Processing & Speed Throttle] (Sliders & WebGPU badge tracking)
+  3. [Data Ingestion Hub] (Houses the new Scraper/Compiler launch button)
+
+### 2. True 50,000,000 Parameter Calculator Fix
+* The current slider configuration maxes out at 1M params because hidden sizing is limited linearly. Fix the underlying math mapping inside App.tsx and the setup view.
+* Ensure that the configuration adjustments (such as adding multiple hidden layers, widening embedding dimensions, or adjusting context vocabulary depth) scale exponentially to allow the model parameter calculation engine to reach up to a true maximum ceiling of 50,000,000 parameters.
+* Dynamically allocate the corresponding matrix size buffers using efficient low-overhead float arrays passed to text.worker.ts when 'Apply Architecture' is clicked.
+
+### 3. Build the "Autonomous Data Matrix & Scraper" Control Panel
+* **The Interface:** Add a premium button in the left sidebar under data ingestion: "Launch Autonomous Data Matrix". Clicking it opens a deep-black overlay modal that locks down focus.
+* **The Automation Intel:** The modal must look at the active model configuration size. If the model is large (e.g., 10M to 50M params), it automatically computes and displays the required token training volume needed for base contextual competency.
+* **The Visual Scraper Stream:** Add a dominant button: "Execute Autonomous Data Synthesis & Scrape". When triggered:
+  - Do not do it silently. Render a live, high-speed terminal log streaming down inside the modal, showing data categories being synthesized, formatted, and tokenized line-by-line (e.g., "[Ingesting Core Language Patterns... Done]", "[Structuring Bigram Association Frameworks... 1,400 lines compiled]").
+  - It must generate hundreds to thousands of formatted training data lines live on screen.
+* **The Engine Lock:** Once the streaming sequence concludes, reveal a prominent "Commit Dataset to Core Engine" button. Clicking this takes the compiled dataset string, overrides the active training corpus buffer, binds it directly to the background worker loop, and closes the modal so the user can immediately hit "Train".
+
+### 4. Direct WebGPU Connection Check
+* Ensure the async header badge `navigator.gpu` check actively tests hardware permissions via `requestAdapter()`. 
+* Ensure that if a graphics card handles the parallel processing layer, the status indicator cleanly locks to green "[WebGPU Acceleration Active]"; otherwise, it falls back gracefully to standard multi-thread allocation.
+
+Verify the entire codebase is free of layout overlap bugs, legacy floating buttons, or unmapped state variables. Run a full compilation check to ensure 0 TypeScript errors.

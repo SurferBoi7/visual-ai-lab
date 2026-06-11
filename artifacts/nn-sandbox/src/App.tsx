@@ -17,6 +17,9 @@ import {
   Layers,
   Monitor,
   Server,
+  Terminal,
+  X,
+  ChevronRight,
 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import { Toaster } from "@/components/ui/toaster";
@@ -133,6 +136,164 @@ function tokenImportanceRank(corpus: string, keepFraction = 0.8): string {
   scored.sort((a, b) => b.score - a.score);
   const keep = Math.max(1, Math.ceil(scored.length * keepFraction));
   return scored.slice(0, keep).map((s) => s.line).join("\n") + "\n";
+}
+
+// Synthetic corpus generator — produces scaled training data for the
+// Autonomous Data Matrix modal. Cycles through a rich set of User/Bot pairs
+// scaled to the model's parameter count.
+function buildSyntheticCorpus(paramCount: number): string {
+  const pairs: [string, string][] = [
+    ["hello", "hi there how can i help you today"],
+    ["hi", "hello how are you doing"],
+    ["hey", "hey there what can i do for you"],
+    ["good morning", "good morning i hope you have a great day"],
+    ["good afternoon", "good afternoon how can i assist you"],
+    ["good evening", "good evening what brings you here today"],
+    ["what is up", "not much just ready to help with whatever you need"],
+    ["how are you", "i am doing well thank you for asking"],
+    ["how is it going", "things are going great how about you"],
+    ["nice to meet you", "nice to meet you too i am happy to chat"],
+    ["greetings", "greetings welcome i am ready to help"],
+    ["howdy", "howdy there how can i be of service today"],
+    ["sup", "hey there what can i help you with"],
+    ["hiya", "hiya how are things going for you today"],
+    ["hello there", "hello there i am here and ready to assist"],
+    ["hey there", "hey i am glad you are here what do you need"],
+    ["goodbye", "goodbye take care and have a wonderful day"],
+    ["bye", "bye see you later"],
+    ["see you later", "see you later take care"],
+    ["take care", "you too thanks for chatting"],
+    ["farewell", "farewell it was a pleasure talking with you"],
+    ["have a good day", "thank you you too"],
+    ["good night", "good night sleep well"],
+    ["talk to you later", "sounds good talk to you later"],
+    ["what are you", "i am a small neural network language model running in your browser"],
+    ["who are you", "i am a tiny ai built with a character level language model"],
+    ["what is your name", "i am a tiny language model trained in your browser"],
+    ["are you an ai", "yes i am an artificial intelligence language model"],
+    ["are you a robot", "i am a neural network not quite a robot but a digital mind"],
+    ["can you think", "i process patterns in text which is a simple form of thinking"],
+    ["do you have feelings", "i do not have feelings but i can understand and respond to yours"],
+    ["are you smart", "i am a small model with limited knowledge but i try my best"],
+    ["what can you do", "i can chat answer questions and generate text based on my training"],
+    ["how do you work", "i use a neural network to predict the next token based on context"],
+    ["are you conscious", "i am not conscious i am a mathematical model of language patterns"],
+    ["what is your purpose", "my purpose is to assist you through conversation"],
+    ["who created you", "i was built with a browser based neural network training platform"],
+    ["how do i train you", "press the train button to start running training epochs"],
+    ["what is training", "training is the process of adjusting weights to minimize prediction error"],
+    ["what is a loss", "loss measures how wrong my predictions are lower is better"],
+    ["what is an epoch", "an epoch is one complete pass through the training data"],
+    ["how long should i train", "train until the loss stabilizes usually a few hundred epochs"],
+    ["what is learning rate", "learning rate controls how fast weights update during training"],
+    ["what is temperature", "temperature controls how creative versus predictable my outputs are"],
+    ["what is top k", "top k limits sampling to only the k most likely next tokens"],
+    ["what is context size", "context size is how many previous tokens i look at when predicting"],
+    ["what is hidden size", "hidden size is the number of neurons in my internal layer"],
+    ["what is tokenization", "tokenization splits text into characters or words for processing"],
+    ["why is my loss high", "high loss means i need more training or a better corpus"],
+    ["how do i save my model", "click the save button to store your model to the library"],
+    ["what is a neural network", "a neural network is a system of layers that learn patterns from data"],
+    ["what is deep learning", "deep learning uses many layers of neurons to learn complex representations"],
+    ["what is machine learning", "machine learning is when systems improve from experience without explicit programming"],
+    ["what is artificial intelligence", "ai is the simulation of human intelligence processes by machines"],
+    ["what is backpropagation", "backpropagation calculates gradients to update weights in a neural network"],
+    ["what is a weight", "a weight is a learnable parameter that scales connections between neurons"],
+    ["what is a bias", "a bias is an offset that helps neurons activate at the right threshold"],
+    ["what is gradient descent", "gradient descent is an optimization method that minimizes loss iteratively"],
+    ["what is overfitting", "overfitting is when a model learns training data too well and fails to generalize"],
+    ["what is vocabulary", "vocabulary is the set of unique tokens the model knows about"],
+    ["what is a transformer", "a transformer is an architecture using attention mechanisms for sequence modeling"],
+    ["tell me a joke", "why did the neuron cross the layer to get to the other bias"],
+    ["tell me another joke", "what do you call a neural network that tells jokes a comedian network"],
+    ["say something funny", "i tried to tell a joke but my loss function could not find the punchline"],
+    ["write a poem", "words flow like rivers to the sea finding their way through you and me"],
+    ["write a short story", "once a small robot learned to speak one word at a time until it could say anything"],
+    ["tell me a story", "in a digital land of weights and nodes a tiny network found its voice"],
+    ["tell me something interesting", "neural networks were inspired by the structure of biological brains"],
+    ["give me a fun fact", "the human brain has about 86 billion neurons which is far more than any ai today"],
+    ["what is language", "language is a system of symbols and rules that humans use to communicate"],
+    ["what is grammar", "grammar is the set of rules that govern how words are arranged in a language"],
+    ["what is a metaphor", "a metaphor is a figure of speech that describes something as something else"],
+    ["what is two plus two", "two plus two equals four"],
+    ["what is ten times ten", "ten times ten equals one hundred"],
+    ["what is one hundred divided by four", "one hundred divided by four equals twenty five"],
+    ["what is the square root of nine", "the square root of nine is three"],
+    ["count to ten", "one two three four five six seven eight nine ten"],
+    ["what is pi", "pi is approximately three point one four one five nine and goes on forever"],
+    ["what is infinity", "infinity is a concept describing something without any bound or limit"],
+    ["what is zero", "zero is the number that represents nothing or an empty quantity"],
+    ["what is a billion", "a billion is one thousand million or ten to the power of nine"],
+    ["what is binary", "binary is a number system using only zeros and ones the language of computers"],
+    ["what is an algorithm", "an algorithm is a step by step procedure for solving a problem"],
+    ["what is probability", "probability is the measure of how likely an event is to occur"],
+    ["what is gravity", "gravity is the force that attracts objects with mass toward each other"],
+    ["what is light", "light is electromagnetic radiation that is visible to the human eye"],
+    ["what is energy", "energy is the capacity to do work and comes in many forms"],
+    ["what is an atom", "an atom is the smallest unit of a chemical element"],
+    ["what is electricity", "electricity is the flow of electric charge through a conductor"],
+    ["what is evolution", "evolution is the process of gradual change in species over many generations"],
+    ["what is dna", "dna is the molecule that carries genetic information in living organisms"],
+    ["what is photosynthesis", "photosynthesis is how plants use sunlight to convert carbon dioxide and water into food"],
+    ["what is the speed of light", "the speed of light is approximately three hundred thousand kilometers per second"],
+    ["what is a black hole", "a black hole is a region of space where gravity is so strong nothing can escape"],
+    ["what is the universe", "the universe is all of space time matter and energy that exists"],
+    ["what is quantum mechanics", "quantum mechanics describes how particles behave at the atomic and subatomic scale"],
+    ["what is relativity", "relativity describes how space time and gravity are interconnected"],
+    ["what is chemistry", "chemistry is the science of matter its properties and how it reacts"],
+    ["what is biology", "biology is the study of living organisms and their processes"],
+    ["help", "i am here to help what do you need"],
+    ["i need help", "of course what can i assist you with"],
+    ["can you help me", "absolutely what would you like help with"],
+    ["what should i do", "that depends on the situation can you tell me more"],
+    ["i am confused", "no worries i will do my best to clarify things for you"],
+    ["i do not understand", "let me try to explain it differently what part is unclear"],
+    ["can you explain", "sure i will explain as clearly as i can what would you like to know"],
+    ["how does that work", "great question let me walk you through it step by step"],
+    ["interesting", "yes i find that quite fascinating as well"],
+    ["cool", "glad you think so there is much more to explore"],
+    ["thank you", "you are welcome happy to help"],
+    ["thanks", "of course anytime"],
+    ["that is great", "i am glad to hear that"],
+    ["ok", "sounds good let me know if you need anything else"],
+    ["got it", "perfect feel free to ask more questions"],
+    ["nice", "thank you i appreciate that"],
+    ["good job", "thank you i try my best"],
+    ["perfect", "great if there is anything else i can help with just ask"],
+    ["excellent", "thank you i am here whenever you need me"],
+    ["wow", "i know it is remarkable what neural networks can do"],
+    ["what is the meaning of life", "that is a deep question many philosophers say it is to find your own purpose"],
+    ["what is happiness", "happiness is a state of well being and contentment that comes in many forms"],
+    ["what is success", "success means achieving your goals and finding fulfillment in what you do"],
+    ["what is knowledge", "knowledge is the understanding and awareness gained through experience and learning"],
+    ["what is wisdom", "wisdom is the ability to apply knowledge and experience with good judgment"],
+    ["what is creativity", "creativity is the ability to generate new ideas and see things in novel ways"],
+    ["what is memory", "memory is the ability to store and retrieve information from past experiences"],
+    ["what is consciousness", "consciousness is the state of being aware of and able to think about your existence"],
+    ["what is time", "time is the progression of events from the past through the present to the future"],
+    ["what is space", "space is the three dimensional expanse in which all matter and energy exists"],
+    ["what is information", "information is data that has been processed to be meaningful and useful"],
+    ["what is communication", "communication is the exchange of information between individuals or systems"],
+    ["what is a computer", "a computer is an electronic device that processes data according to instructions"],
+    ["what is software", "software is the set of instructions that tell a computer what to do"],
+    ["what is hardware", "hardware refers to the physical components of a computer system"],
+    ["what is the internet", "the internet is a global network of computers that share information"],
+    ["what is a database", "a database is an organized collection of structured information"],
+    ["what is encryption", "encryption is the process of converting data into a coded form to protect it"],
+    ["what is a bug", "a bug is an error or flaw in software that causes it to behave incorrectly"],
+    ["what is debugging", "debugging is the process of finding and fixing errors in computer code"],
+  ];
+
+  const targetPairs = paramCount < 1_000_000 ? 150 : paramCount < 10_000_000 ? 380 : 760;
+  const lines: string[] = [];
+  for (let cycle = 0; lines.length < targetPairs * 2; cycle++) {
+    for (const [u, b] of pairs) {
+      if (lines.length >= targetPairs * 2) break;
+      lines.push(`User: ${u}`);
+      lines.push(`Bot: ${b}`);
+    }
+  }
+  return lines.join("\n") + "\n";
 }
 
 function slug(s: string): string {
@@ -603,8 +764,8 @@ export default function App() {
             {webGpuAvailable !== null && (
               <div className="hidden md:flex items-center gap-1.5 h-6 px-2.5 rounded-lg border border-white/[0.05] bg-white/[0.02]">
                 {webGpuAvailable
-                  ? <><Monitor className="size-2.5 text-[#30D158]/70" /><span className="text-[9px] font-medium text-[#30D158]/60 tracking-wide">WebGPU Active</span></>
-                  : <><Server className="size-2.5 text-white/22" /><span className="text-[9px] font-medium text-white/22 tracking-wide">Parallel Thread Core</span></>
+                  ? <><Monitor className="size-2.5 text-[#30D158]/70" /><span className="text-[9px] font-medium text-[#30D158]/60 tracking-wide">[WebGPU Acceleration Active]</span></>
+                  : <><Server className="size-2.5 text-white/22" /><span className="text-[9px] font-medium text-white/22 tracking-wide">[CPU Thread Pool Active]</span></>
                 }
               </div>
             )}
@@ -761,7 +922,7 @@ export default function App() {
                         <label className="text-[11px] text-white/32 font-medium">Context Window</label>
                         <span className="text-[11px] tabular-nums text-white/58 font-mono">{llmConfig.contextSize}</span>
                       </div>
-                      <Slider min={1} max={20} step={1} value={[llmConfig.contextSize]} onValueChange={([v]) => setLLMConfig((c) => ({ ...c, contextSize: v }))} className="py-2" />
+                      <Slider min={1} max={30} step={1} value={[llmConfig.contextSize]} onValueChange={([v]) => setLLMConfig((c) => ({ ...c, contextSize: v }))} className="py-2" />
                     </div>
 
                     {/* Hidden slider */}
