@@ -1,0 +1,27 @@
+
+We need to pick up exactly where we left off, fix a critical parameter calculation bottleneck, and clean up the UI layout.
+
+Your prime directive: DO NOT change the core tensor backpropagation math in textnet.ts unless expanding network dimensions. We are refactoring App.tsx, text.worker.ts, and the layout views.
+
+Please execute the following definitive tasks immediately:
+
+### 1. Fix the 50,000,000 Parameter Mathematical Structure
+* ISSUE: The current sliders only reach 1M parameters because the hidden neuron size slider maxes out linearly. Simply cranking up a single width slider is unscientific and will crash the browser thread.
+* RESOLUTION: Redesign the architecture parameters to support deep stacking. Add a 'Number of Hidden Layers' configuration control (allowing up to 6 to 8 layers) and allow 'Hidden/Embedding Dimensions' to scale up to 2048. 
+* Update the parameter calculator formula in the UI and worker configuration to evaluate the entire deep matrix: (Vocabulary × Embedding Dimensions) + (Layers × Dimension × Dimension). Ensure adjusting these controls scales the active configuration accurately up to a true ceiling of 50,000,000 parameters.
+* Ensure all weights use Float32Arrays inside text.worker.ts to keep the 50M parameter footprint under 200MB of active RAM, making it completely safe for my 16GB Intel Mac.
+
+### 2. Deep Clean & Redesign of the Left Control Sidebar
+* Hard purge the stubborn, old legacy export and share layout options that are still rendering underneath the sliders. They must be completely deleted from the code.
+* Restructure the Left Sidebar to span full vertical height, using a clean layout containing exactly three non-scrollable control blocks:
+  1. [Hyperparameter Architecture Matrix] (Dials/sliders for layers, dimensions, context window, learning rate)
+  2. [Engine Status & Speed Throttle] (Speed slider, true async 'await navigator.gpu' WebGPU permission check indicator)
+  3. [Data Ingestion Matrix] (Houses the main launcher button for the autonomous compiler)
+
+### 3. Implement the Interactive "Autonomous Data Matrix" Scraper Panel
+* Build an premium, full-screen interactive modal popup triggered by a new "Launch Autonomous Data Matrix" button in the sidebar.
+* The system must check the target model size (e.g., 50M). It must automatically compute and display the mandatory volume of training words needed for conversational competency.
+* Implement the "Execute Autonomous Data Synthesis & Scrape" button. When clicked, do not let it process silently in memory. Render a live, fast-rolling terminal console log box inside the popup window showing sentences being fetched, tokenized, and weighted line-by-line in real time right in front of my eyes.
+* Once thousands of data lines are compiled, show a clear "Commit Dataset to Core Engine" action button to override the active training buffer, link it straight to the WebWorker sequence, and close the panel so I can hit the "Train" switch.
+
+Verify that the entire compilation pass returns zero TypeScript errors, that the layout remains completely non-scrollable on the desktop grid, and that old visual ghost elements are entirely removed.
