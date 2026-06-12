@@ -278,6 +278,48 @@ self.onmessage = (e: MessageEvent) => {
         topK = msg.partial.topK;
       }
       break;
+    case "generateStream": {
+      if (!net) {
+        postMessage({ type: "streamToken", id: msg.id, token: "", done: true, fullText: "(model not ready — try training first)" });
+        break;
+      }
+      const streamSeedTokens = tokenize(normalizeText(msg.seed ?? ""), tokenization);
+      const streamLength = msg.length ?? 300;
+      const streamTemp = msg.temperature ?? temperature;
+      const streamCtxSize = net.config.contextSize;
+      const streamPadId = stoi[PAD_TOKEN] ?? stoi[" "] ?? 0;
+      const streamEosId = stoi[EOS_TOKEN];
+      const streamSeedIds = streamSeedTokens.map((t) => stoi[t] !== undefined ? stoi[t] : streamPadId);
+      let streamCtx: number[];
+      if (streamSeedIds.length >= streamCtxSize) {
+        streamCtx = streamSeedIds.slice(-streamCtxSize);
+      } else {
+        streamCtx = new Array(streamCtxSize - streamSeedIds.length).fill(streamPadId).concat(streamSeedIds);
+      }
+      const streamGenerated: string[] = [];
+      let streamText = "";
+      for (let i = 0; i < streamLength; i++) {
+        const { probs } = net.forward(streamCtx);
+        const filtered = applyTopK(probs, topK);
+        const next = sampleFromProbs(filtered, streamTemp);
+        if (streamEosId !== undefined && next === streamEosId) break;
+        const tok = vocab[next];
+        streamCtx = streamCtx.slice(1).concat(next);
+        if (tok === PAD_TOKEN) continue;
+        streamGenerated.push(tok);
+        streamText = joinTokens(streamGenerated, tokenization);
+        const streamCut = findStopCut(streamText);
+        if (streamCut !== -1) {
+          streamText = streamText.slice(0, streamCut).replace(/\s+$/, "");
+          break;
+        }
+        const displayTok = tokenization === "char" ? tok : tok + " ";
+        postMessage({ type: "streamToken", id: msg.id, token: displayTok, done: false, fullText: "" });
+      }
+      const streamCleaned = streamText.replace(/^bot\s+/i, "").trim();
+      postMessage({ type: "streamToken", id: msg.id, token: "", done: true, fullText: streamCleaned || "(silence)" });
+      break;
+    }
     case "generate": {
       if (!net) {
         postMessage({

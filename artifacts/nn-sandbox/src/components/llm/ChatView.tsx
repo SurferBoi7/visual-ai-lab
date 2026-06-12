@@ -39,6 +39,7 @@ interface Props {
   loading: boolean;
   setLoading: React.Dispatch<React.SetStateAction<boolean>>;
   generate: (seed: string) => Promise<string>;
+  generateStream?: (seed: string, onToken: (token: string, done: boolean, fullText: string) => void) => void;
   liveSample: string;
   epoch: number;
   loss: number;
@@ -58,6 +59,7 @@ export function ChatView({
   loading,
   setLoading,
   generate,
+  generateStream,
   liveSample,
   epoch,
   loss,
@@ -157,10 +159,56 @@ export function ChatView({
     updateActiveMessages((prev) => [...prev, userMsg]);
     setInput("");
     setLoading(true);
+
     try {
-      const reply = await generate(text);
-      const aiMsg: ChatMessage = { id: `a-${Date.now()}`, role: "assistant", content: reply.trim() || "(silence)" };
-      updateActiveMessages((prev) => [...prev, aiMsg]);
+      if (generateStream) {
+        const aiMsgId = `a-${Date.now()}`;
+        const capturedActiveId = activeId;
+        updateActiveMessages((prev) => [...prev, { id: aiMsgId, role: "assistant", content: "" }]);
+
+        await new Promise<void>((resolve) => {
+          generateStream(text, (token, done, fullText) => {
+            if (!done) {
+              setThreads((prev) =>
+                prev.map((t) =>
+                  t.id === capturedActiveId
+                    ? {
+                        ...t,
+                        messages: t.messages.map((m) =>
+                          m.id === aiMsgId ? { ...m, content: m.content + token } : m,
+                        ),
+                      }
+                    : t,
+                ),
+              );
+            } else {
+              setThreads((prev) =>
+                prev.map((t) =>
+                  t.id === capturedActiveId
+                    ? {
+                        ...t,
+                        messages: t.messages.map((m) =>
+                          m.id === aiMsgId
+                            ? { ...m, content: fullText || m.content || "(silence)" }
+                            : m,
+                        ),
+                      }
+                    : t,
+                ),
+              );
+              resolve();
+            }
+          });
+        });
+      } else {
+        const reply = await generate(text);
+        const aiMsg: ChatMessage = {
+          id: `a-${Date.now()}`,
+          role: "assistant",
+          content: reply.trim() || "(silence)",
+        };
+        updateActiveMessages((prev) => [...prev, aiMsg]);
+      }
     } finally {
       setLoading(false);
     }

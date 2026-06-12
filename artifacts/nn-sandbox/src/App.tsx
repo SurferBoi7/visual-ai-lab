@@ -20,6 +20,9 @@ import {
   Terminal,
   X,
   ChevronRight,
+  Eye,
+  FileText,
+  ChevronDown as ChevronDownIcon,
 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import { Toaster } from "@/components/ui/toaster";
@@ -316,6 +319,9 @@ export default function App() {
   const pendingGenRef = useRef<Map<string, (text: string) => void>>(new Map());
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const matrixCorpusRef = useRef<string>("");
+  const streamingRef = useRef<Map<string, (token: string, done: boolean, fullText: string) => void>>(new Map());
+  const liveSnapshotRef = useRef<Map<string, { config: LLMConfig; numHiddenLayers: number; datasets: Dataset[] }>>(new Map());
+  const currentModelIdRef = useRef<string | null>(null);
 
   // ── LLM state ──────────────────────────────────────────────────────────────
   const [datasets, setDatasets] = useState<Dataset[]>([
@@ -357,6 +363,9 @@ export default function App() {
   const [matrixStreaming, setMatrixStreaming] = useState(false);
   const [matrixStreamLines, setMatrixStreamLines] = useState<string[]>([]);
   const [matrixCommitReady, setMatrixCommitReady] = useState(false);
+  const [datasetExplorerOpen, setDatasetExplorerOpen] = useState(false);
+  const [explorerTab, setExplorerTab] = useState<"datasets" | "corpus">("datasets");
+  const [expandedDatasets, setExpandedDatasets] = useState<Set<number>>(new Set());
 
   const [tab, setTab] = useState<TabKey>("train");
   const [trainStep, setTrainStep] = useState<TrainStep>("fleet");
@@ -410,6 +419,12 @@ export default function App() {
       } else if (msg.type === "exportModel") {
         const cb = pendingGenRef.current.get(msg.id);
         if (cb) { pendingGenRef.current.delete(msg.id); cb(JSON.stringify(msg.payload)); }
+      } else if (msg.type === "streamToken") {
+        const cb = streamingRef.current.get(msg.id as string);
+        if (cb) {
+          cb(msg.token as string, msg.done as boolean, (msg.fullText as string) ?? "");
+          if (msg.done as boolean) streamingRef.current.delete(msg.id as string);
+        }
       }
     };
     worker.postMessage({
@@ -476,49 +491,71 @@ export default function App() {
 
   const handleReset = () => { rebuildLLM(); setMessages([]); };
 
+  function preparePromptSeed(
+    seed: string,
+    corpus: string,
+    tokenization: LLMConfig["tokenization"],
+    systemPrompt: string,
+  ): { formattedSeed: string } | { fallback: string } {
+    let normalizedInput = normalizePromptForLLM(seed);
+    if (tokenization === "word") {
+      const corpusVocab = new Set(tokenize(normalizePromptForLLM(corpus), "word"));
+      const inputWords = normalizedInput.split(" ").filter(Boolean);
+      const AUTOCORRECT_MAX_DIST = 1;
+      const correctedWords = inputWords.map((w) => {
+        if (corpusVocab.has(w)) return w;
+        let best = w; let bestDist = Infinity;
+        for (const v of corpusVocab) { const d = levenshteinDistance(w, v); if (d < bestDist) { bestDist = d; best = v; } }
+        return bestDist <= AUTOCORRECT_MAX_DIST ? best : w;
+      });
+      const meaningful = correctedWords.filter((w) => !OOV_STOP_WORDS.has(w));
+      if (meaningful.length > 0 && meaningful.every((w) => !corpusVocab.has(w))) {
+        return { fallback: OOV_FALLBACK_REPLY };
+      }
+      let routedPrompt: string | null = null;
+      if (meaningful.length > 0) {
+        const meaningfulSet = new Set(meaningful);
+        const knownPrompts = corpus.split("\n")
+          .filter((l) => /^\s*User:\s/i.test(l))
+          .map((l) => l.replace(/^\s*User:\s*/i, "").replace(/\bBot:\s.*$/i, "").trim());
+        let bestScore = 0;
+        for (const kp of knownPrompts) {
+          const kpCore = new Set(normalizePromptForLLM(kp).split(" ").filter((w) => w && !OOV_STOP_WORDS.has(w)));
+          let overlap = 0;
+          for (const w of kpCore) { if (meaningfulSet.has(w)) overlap++; }
+          if (overlap > bestScore) { bestScore = overlap; routedPrompt = normalizePromptForLLM(kp); }
+        }
+      }
+      normalizedInput = routedPrompt ?? correctedWords.join(" ");
+    }
+    const systemPart = systemPrompt ? normalizePromptForLLM(systemPrompt) + " " : "";
+    return { formattedSeed: `${systemPart}user ${normalizedInput} bot ` };
+  }
+
   const generateFromWorker = useCallback(
     (seed: string): Promise<string> =>
       new Promise((resolve) => {
         const worker = textWorkerRef.current;
         if (!worker) { resolve("(model not ready)"); return; }
-
-        let normalizedInput = normalizePromptForLLM(seed);
-
-        if (llmConfig.tokenization === "word") {
-          const corpusVocab = new Set(tokenize(normalizePromptForLLM(llmConfig.corpus), "word"));
-          const inputWords = normalizedInput.split(" ").filter(Boolean);
-          const AUTOCORRECT_MAX_DIST = 1;
-          const correctedWords = inputWords.map((w) => {
-            if (corpusVocab.has(w)) return w;
-            let best = w; let bestDist = Infinity;
-            for (const v of corpusVocab) { const d = levenshteinDistance(w, v); if (d < bestDist) { bestDist = d; best = v; } }
-            return bestDist <= AUTOCORRECT_MAX_DIST ? best : w;
-          });
-          const meaningful = correctedWords.filter((w) => !OOV_STOP_WORDS.has(w));
-          if (meaningful.length > 0 && meaningful.every((w) => !corpusVocab.has(w))) { resolve(OOV_FALLBACK_REPLY); return; }
-          let routedPrompt: string | null = null;
-          if (meaningful.length > 0) {
-            const meaningfulSet = new Set(meaningful);
-            const knownPrompts = llmConfig.corpus.split("\n")
-              .filter((l) => /^\s*User:\s/i.test(l))
-              .map((l) => l.replace(/^\s*User:\s*/i, "").replace(/\bBot:\s.*$/i, "").trim());
-            let bestScore = 0;
-            for (const kp of knownPrompts) {
-              const kpCore = new Set(normalizePromptForLLM(kp).split(" ").filter((w) => w && !OOV_STOP_WORDS.has(w)));
-              let overlap = 0;
-              for (const w of kpCore) { if (meaningfulSet.has(w)) overlap++; }
-              if (overlap > bestScore) { bestScore = overlap; routedPrompt = normalizePromptForLLM(kp); }
-            }
-          }
-          normalizedInput = routedPrompt ?? correctedWords.join(" ");
-        }
-
+        const result = preparePromptSeed(seed, llmConfig.corpus, llmConfig.tokenization, llmConfig.systemPrompt);
+        if ("fallback" in result) { resolve(result.fallback); return; }
         const id = `g-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         pendingGenRef.current.set(id, resolve);
-        const systemPart = llmConfig.systemPrompt ? normalizePromptForLLM(llmConfig.systemPrompt) + " " : "";
-        const formattedSeed = `${systemPart}user ${normalizedInput} bot `;
-        worker.postMessage({ type: "generate", id, seed: formattedSeed, length: 300, temperature: llmConfig.temperature });
+        worker.postMessage({ type: "generate", id, seed: result.formattedSeed, length: 300, temperature: llmConfig.temperature });
       }),
+    [llmConfig.temperature, llmConfig.systemPrompt, llmConfig.corpus, llmConfig.tokenization],
+  );
+
+  const generateStreamFromWorker = useCallback(
+    (seed: string, onToken: (token: string, done: boolean, fullText: string) => void): void => {
+      const worker = textWorkerRef.current;
+      if (!worker) { onToken("", true, "(model not ready)"); return; }
+      const result = preparePromptSeed(seed, llmConfig.corpus, llmConfig.tokenization, llmConfig.systemPrompt);
+      if ("fallback" in result) { onToken("", true, result.fallback); return; }
+      const id = `gs-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      streamingRef.current.set(id, onToken);
+      worker.postMessage({ type: "generateStream", id, seed: result.formattedSeed, length: 300, temperature: llmConfig.temperature });
+    },
     [llmConfig.temperature, llmConfig.systemPrompt, llmConfig.corpus, llmConfig.tokenization],
   );
 
@@ -617,6 +654,7 @@ export default function App() {
     setLibraryRefresh((v) => v + 1);
 
     // 4. Navigate to Training Dashboard
+    currentModelIdRef.current = model.id;
     setMessages([]);
     setNewModelName("");
     setTrainStep("training");
@@ -687,11 +725,28 @@ export default function App() {
       ["■ SYNTHESIS COMPLETE — Dataset is ready for engine commit", 60],
     ];
 
+    // RAF-batched rendering: accumulate lines that fire in the same 16ms frame
+    // into a single setState call to keep the browser completely smooth.
+    const pendingBuf: string[] = [];
+    let rafId: number | null = null;
+    const flushBuf = () => {
+      if (pendingBuf.length > 0) {
+        const toAdd = [...pendingBuf];
+        pendingBuf.length = 0;
+        setMatrixStreamLines((prev) => [...prev, ...toAdd]);
+      }
+      rafId = null;
+    };
+    const addLine = (line: string) => {
+      pendingBuf.push(line);
+      if (!rafId) rafId = requestAnimationFrame(flushBuf);
+    };
+
     let t = 0;
     for (const [text, delay] of phases) {
       t += delay;
       const captured = text;
-      setTimeout(() => { setMatrixStreamLines((prev) => [...prev, captured]); }, t);
+      setTimeout(() => addLine(captured), t);
     }
     setTimeout(() => { setMatrixStreaming(false); setMatrixCommitReady(true); }, t + 200);
   };
@@ -724,36 +779,48 @@ export default function App() {
 
   const handleLoadModel = (model: SavedModel) => {
     if (llmPlaying) { textWorkerRef.current?.postMessage({ type: "pause" }); setLLMPlaying(false); }
-    const w = model.weights as CharLMWeights;
-    const restoredTok: Tokenization =
-      w.tokenization === "word" || w.tokenization === "char"
-        ? w.tokenization
-        : (w.vocab.some((t) => typeof t === "string" && t.length > 1) ? "word" : "char");
-    setLLMConfig((prev) => ({
-      ...prev,
-      corpus: w.corpus ?? w.vocab.join(restoredTok === "word" ? " " : ""),
-      contextSize: w.config.contextSize,
-      hiddenSize: w.config.hiddenSize,
-      learningRate: w.config.learningRate,
-      temperature: typeof w.temperature === "number" ? w.temperature : 0.6,
-      tokenization: restoredTok,
-    }));
-    if (Array.isArray(w.datasets) && w.datasets.length > 0) {
-      const baseId = Date.now();
-      setDatasets(
-        w.datasets
-          .filter((d): d is { name: string; text: string; active: boolean } =>
-            !!d && typeof d === "object" &&
-            typeof (d as { name?: unknown }).name === "string" &&
-            typeof (d as { text?: unknown }).text === "string" &&
-            typeof (d as { active?: unknown }).active === "boolean",
-          )
-          .map((d, i) => ({ id: baseId + i, name: d.name, text: d.text, active: d.active })),
-      );
+
+    // Restore live in-memory slider snapshot if we have one (unsaved training progress)
+    const snap = liveSnapshotRef.current.get(model.id);
+    if (snap) {
+      setLLMConfig(snap.config);
+      setNumHiddenLayers(snap.numHiddenLayers);
+      setDatasets(snap.datasets);
+    } else {
+      const w = model.weights as CharLMWeights;
+      const restoredTok: Tokenization =
+        w.tokenization === "word" || w.tokenization === "char"
+          ? w.tokenization
+          : (w.vocab.some((t) => typeof t === "string" && t.length > 1) ? "word" : "char");
+      setLLMConfig((prev) => ({
+        ...prev,
+        corpus: w.corpus ?? w.vocab.join(restoredTok === "word" ? " " : ""),
+        contextSize: w.config.contextSize,
+        hiddenSize: w.config.hiddenSize,
+        learningRate: w.config.learningRate,
+        temperature: typeof w.temperature === "number" ? w.temperature : 0.6,
+        tokenization: restoredTok,
+      }));
+      if (Array.isArray(w.datasets) && w.datasets.length > 0) {
+        const baseId = Date.now();
+        setDatasets(
+          w.datasets
+            .filter((d): d is { name: string; text: string; active: boolean } =>
+              !!d && typeof d === "object" &&
+              typeof (d as { name?: unknown }).name === "string" &&
+              typeof (d as { text?: unknown }).text === "string" &&
+              typeof (d as { active?: unknown }).active === "boolean",
+            )
+            .map((d, i) => ({ id: baseId + i, name: d.name, text: d.text, active: d.active })),
+        );
+      }
     }
+
+    const w = model.weights as CharLMWeights;
     textWorkerRef.current?.postMessage({ type: "loadWeights", payload: { ...w, epoch: model.epoch, loss: model.loss } });
+    currentModelIdRef.current = model.id;
     setMessages([]);
-    toast({ title: "Model loaded", description: `${model.name} is now active.` });
+    toast({ title: "Model loaded", description: `${model.name} weights restored.` });
   };
 
   const handleDeleteModel = async (id: string) => {
@@ -1093,7 +1160,16 @@ export default function App() {
                     {/* Panel header */}
                     <div className="h-11 shrink-0 border-b border-white/[0.05] px-3 flex items-center justify-between">
                       <button
-                        onClick={() => setTrainStep("fleet")}
+                        onClick={() => {
+                          if (currentModelIdRef.current) {
+                            liveSnapshotRef.current.set(currentModelIdRef.current, {
+                              config: llmConfig,
+                              numHiddenLayers,
+                              datasets,
+                            });
+                          }
+                          setTrainStep("fleet");
+                        }}
                         className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-white/25 hover:text-white/55 text-[11px] hover:bg-white/[0.04] transition-all border border-transparent hover:border-white/[0.05]"
                       >
                         <ArrowLeft className="size-3" />
@@ -1280,6 +1356,14 @@ export default function App() {
                           <Terminal className="size-3.5" />
                           Launch Autonomous Data Matrix
                         </button>
+
+                        <button
+                          onClick={() => { setExplorerTab("datasets"); setDatasetExplorerOpen(true); }}
+                          className="w-full h-8 rounded-xl border border-white/[0.06] hover:border-[#0A84FF]/20 text-white/28 hover:text-[#0A84FF]/70 text-[10px] font-medium transition-all flex items-center justify-center gap-1.5 hover:bg-[#0A84FF]/[0.04]"
+                        >
+                          <Eye className="size-3" />
+                          View Compiled Training Dataset
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1385,6 +1469,7 @@ export default function App() {
                 loading={chatLoading}
                 setLoading={setChatLoading}
                 generate={generateFromWorker}
+                generateStream={generateStreamFromWorker}
                 liveSample={textSnap.sample}
                 epoch={textSnap.epoch}
                 loss={textSnap.loss}
@@ -1392,7 +1477,7 @@ export default function App() {
                 modelOptions={llmModels.map((m) => ({ id: m.id, label: m.name }))}
                 onSelectModel={(id) => {
                   const m = savedModels.find((s) => s.id === id);
-                  if (m) handleLoadModel(m);
+                  if (m) { handleLoadModel(m); setTab("train"); setTrainStep("training"); }
                 }}
               />
             </div>
@@ -1538,6 +1623,104 @@ export default function App() {
                 <Cpu className="size-4" />
                 Commit Dataset to Core Engine
               </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ Dataset Explorer Overlay ════════════════════════════════════════ */}
+      {datasetExplorerOpen && (
+        <div className="fixed inset-0 z-50 bg-[#000000]/97 backdrop-blur-md flex flex-col">
+          <div className="h-14 shrink-0 border-b border-white/[0.06] px-5 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="size-8 rounded-lg bg-[#30D158]/10 border border-[#30D158]/18 flex items-center justify-center shrink-0">
+                <FileText className="size-3.5 text-[#30D158]/75" />
+              </div>
+              <div>
+                <div className="text-[13px] font-semibold text-white/88 tracking-tight">Compiled Training Dataset</div>
+                <div className="text-[10px] text-white/28 font-mono">
+                  {datasets.filter((d) => d.active).length}/{datasets.length} active datasets · {llmConfig.corpus.length.toLocaleString()} bytes
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => setDatasetExplorerOpen(false)}
+              className="size-8 rounded-lg flex items-center justify-center text-white/22 hover:text-white/65 hover:bg-white/[0.05] transition-all border border-transparent hover:border-white/[0.05]"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+
+          {/* Tab bar */}
+          <div className="shrink-0 border-b border-white/[0.05] px-5 flex gap-4">
+            {(["datasets", "corpus"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setExplorerTab(t)}
+                className={`h-10 text-[11px] font-semibold border-b-2 transition-all ${
+                  explorerTab === t
+                    ? "border-[#30D158] text-[#30D158]"
+                    : "border-transparent text-white/30 hover:text-white/55"
+                }`}
+              >
+                {t === "datasets" ? `Datasets (${datasets.length})` : "Compiled Corpus"}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {explorerTab === "datasets" ? (
+              <div className="max-w-2xl mx-auto space-y-2">
+                {datasets.length === 0 && (
+                  <div className="text-center text-white/22 text-[12px] pt-16">No datasets loaded.</div>
+                )}
+                {datasets.map((d) => {
+                  const lineCount = d.text.split("\n").filter((l) => l.trim()).length;
+                  const isExpanded = expandedDatasets.has(d.id);
+                  return (
+                    <div key={d.id} className={`rounded-2xl border transition-all ${d.active ? "border-white/[0.08] bg-[#0d0d0d]" : "border-white/[0.04] bg-[#080808] opacity-60"}`}>
+                      <button
+                        onClick={() => setExpandedDatasets((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
+                          return next;
+                        })}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-left"
+                      >
+                        <div className={`size-2 rounded-full shrink-0 ${d.active ? "bg-[#30D158]" : "bg-white/20"}`} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[12px] font-semibold text-white/75 truncate">{d.name}</div>
+                          <div className="text-[10px] text-white/28 font-mono mt-0.5">{lineCount} lines · {d.text.length.toLocaleString()} bytes</div>
+                        </div>
+                        <ChevronDownIcon className={`size-3.5 text-white/25 transition-transform shrink-0 ${isExpanded ? "rotate-180" : ""}`} />
+                      </button>
+                      {isExpanded && (
+                        <div className="border-t border-white/[0.05] px-4 py-3">
+                          <pre className="text-[10px] font-mono text-white/45 whitespace-pre-wrap break-words leading-relaxed max-h-64 overflow-y-auto">
+                            {d.text}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="max-w-2xl mx-auto">
+                {llmConfig.corpus ? (
+                  <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d0d] p-4">
+                    <div className="text-[9px] uppercase tracking-[0.12em] text-white/20 mb-3 font-medium flex items-center gap-1.5">
+                      <span className="size-1.5 rounded-full bg-[#30D158]" />
+                      Merged &amp; Compiled Corpus
+                    </div>
+                    <pre className="text-[10px] font-mono text-white/50 whitespace-pre-wrap break-words leading-relaxed">
+                      {llmConfig.corpus}
+                    </pre>
+                  </div>
+                ) : (
+                  <div className="text-center text-white/22 text-[12px] pt-16">No corpus compiled yet. Add datasets first.</div>
+                )}
+              </div>
             )}
           </div>
         </div>

@@ -1,0 +1,23 @@
+Act as an Elite Full-Stack AI Engineer and Lead Workspace Architect. We are standing up our advanced browser-native machine learning development platform: "Tiny AI Foundry." Because this is a fresh workspace deployment session, I am providing you with the full architectural context and the core implementation features required to eliminate state resets, fix chat binding, optimize scraping, and implement live token streaming.
+
+### ARCHITECTURAL BASELINE (Context for the Agent)
+* The platform consists of a single-page React workspace (`App.tsx`), a high-performance style matrix (`index.css`), and an isolated multi-threaded calculation background script (`text.worker.ts`).
+* The UI is a fixed, non-scrollable dual-column dashboard. The left column houses architecture configurations (Layers up to 8, Dimensions up to 2048, Context up to 30), speed throttles, and ingestion controls. The right column displays a custom SVG Matrix Pipeline Visualizer, live metric tracking cards (Loss, Tokens/sec, Vocab Coverage, Bits/Char), and a live output window.
+
+Please implement the following architectural enhancements and bug fixes cleanly:
+
+### 1. Persistent Weight & Slider State Synchronization
+* **The Bug:** Currently, if training is stopped or the user navigates from the Training view to the Chat Studio, the configured slider options, active weights, and dataset states reset entirely to default values.
+* **The Fix:** Create a central application state repository for all active model profiles. When a user stops training a specific model profile, capture the exact configuration (Hidden Layers, Embedding Dimensions, Context Window, Learning Rate, Vocabulary maps, and the active Float32Array weight matrices).
+* Save this state explicitly to its unique Model Profile Card. When navigating back into that model configuration, automatically re-hydrate all left-sidebar sliders and reload the trained weights back into the active Web Worker thread without memory loss.
+
+### 2. Chat Matrix Model Binding & Token Streaming
+* **Strict Weight Loading:** In the Chat Studio tab, when a user selects a trained model profile from the active selector, ensure the engine explicitly initializes that model's specific dictionary and weight buffer. Chatting must query that specific model instance's mathematical weights, not a generic default instance.
+* **Token Streaming Response:** Rewrite the generation handler in the Chat Studio. Instead of waiting for the worker to finish generating the full sentence block, implement a token-by-token or character-by-character live streaming engine. As the background worker predicts the next token index, immediately pass it to the UI thread using a high-frequency stream, appending it smoothly to the message bubble in real-time.
+
+### 3. High-Density Knowledge Scraper & Data Explorer Panel
+* **Advanced Content Scraping Synthesis:** Upgrade the "Autonomous Data Matrix" modal scraper. When the user clicks "Execute Autonomous Data Synthesis & Scrape," simulate high-fidelity ingestion of structured encyclopedia-grade text (e.g., highly formatted Wikipedia entries covering history, logic systems, science, and core dictionary grammar structures) to build deep semantic knowledge for 10M–50M configurations.
+* **Main Thread Lag Optimization:** To prevent the user's computer from freezing or lagging during scraping, decouple the terminal UI rendering from the generation loop. Batch the text update prints every 100 lines using requestAnimationFrame, keeping the browser completely smooth.
+* **The Global Data Explorer Tool:** Directly underneath the scraper launcher button in Section 3 of the Left Sidebar, add a persistent tool link: "View Compiled Training Dataset". Clicking this opens a dedicated overlay container where the user can browse, inspect, and read through the entire aggregated and formatted text corpus currently loaded into the active memory pool.
+
+Execute this comprehensive platform stabilization. Ensure all layout frames are clean, typography is sharp, and the complete workspace passes a strict TypeScript validation check with 0 compilation errors.
