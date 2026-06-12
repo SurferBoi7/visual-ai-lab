@@ -358,11 +358,16 @@ export default function App() {
   const [feederEnabled, setFeederEnabled] = useState(false);
   const [tokenRankingEnabled, setTokenRankingEnabled] = useState(false);
   const [lossHistory, setLossHistory] = useState<number[]>([]);
+  const [perplexityHistory, setPerplexityHistory] = useState<number[]>([]);
+  const [workerGpuActive, setWorkerGpuActive] = useState(false);
   const [numHiddenLayers, setNumHiddenLayers] = useState(2);
   const [matrixModalOpen, setMatrixModalOpen] = useState(false);
   const [matrixStreaming, setMatrixStreaming] = useState(false);
   const [matrixStreamLines, setMatrixStreamLines] = useState<string[]>([]);
   const [matrixCommitReady, setMatrixCommitReady] = useState(false);
+  const [matrixWikiEnabled, setMatrixWikiEnabled] = useState(true);
+  const [matrixDictEnabled, setMatrixDictEnabled] = useState(true);
+  const [matrixAutoLoop, setMatrixAutoLoop] = useState(false);
   const [datasetExplorerOpen, setDatasetExplorerOpen] = useState(false);
   const [explorerTab, setExplorerTab] = useState<"datasets" | "corpus">("datasets");
   const [expandedDatasets, setExpandedDatasets] = useState<Set<number>>(new Set());
@@ -412,7 +417,14 @@ export default function App() {
             const next = [...prev, msg.loss as number];
             return next.length > 80 ? next.slice(-80) : next;
           });
+          setPerplexityHistory((prev) => {
+            const ppl = Math.exp(msg.loss as number);
+            const next = [...prev, Number.isFinite(ppl) ? ppl : 0];
+            return next.length > 80 ? next.slice(-80) : next;
+          });
         }
+      } else if (msg.type === "gpuStatus") {
+        setWorkerGpuActive(msg.active === true);
       } else if (msg.type === "generation") {
         const cb = pendingGenRef.current.get(msg.id);
         if (cb) { pendingGenRef.current.delete(msg.id); cb(msg.text); }
@@ -455,6 +467,44 @@ export default function App() {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
     }
   }, [matrixStreamLines]);
+
+  // ── Session Persistence (localStorage) ────────────────────────────────────
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("nn-sandbox-session");
+      if (!raw) return;
+      const saved = JSON.parse(raw) as {
+        llmConfig?: Partial<LLMConfig>;
+        numHiddenLayers?: number;
+        datasets?: Dataset[];
+        currentModelId?: string;
+      };
+      if (saved.llmConfig && typeof saved.llmConfig === "object") {
+        setLLMConfig((prev) => ({ ...prev, ...saved.llmConfig }));
+      }
+      if (typeof saved.numHiddenLayers === "number") {
+        setNumHiddenLayers(saved.numHiddenLayers);
+      }
+      if (Array.isArray(saved.datasets) && saved.datasets.length > 0) {
+        setDatasets(saved.datasets);
+      }
+      if (saved.currentModelId) {
+        currentModelIdRef.current = saved.currentModelId;
+      }
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("nn-sandbox-session", JSON.stringify({
+        llmConfig,
+        numHiddenLayers,
+        datasets: datasets.map(({ id, name, text, active }) => ({ id, name, text, active })),
+        currentModelId: currentModelIdRef.current,
+      }));
+    } catch {}
+  }, [llmConfig, numHiddenLayers, datasets]);
 
   const rebuildLLM = () => {
     setLLMPlaying(false);
@@ -754,9 +804,9 @@ export default function App() {
   const commitToEngine = () => {
     const corpusText = matrixCorpusRef.current;
     if (!corpusText) return;
-    const newDataset: Dataset = { id: Date.now(), name: "Autonomous Matrix Dataset", text: corpusText, active: true };
-    setDatasets([newDataset]);
-    setLLMConfig((c) => ({ ...c, corpus: corpusText }));
+    const newDataset: Dataset = { id: Date.now(), name: `Matrix Dataset ${new Date().toLocaleTimeString()}`, text: corpusText, active: true };
+    setDatasets((prev) => [...prev, newDataset]);
+    setLLMConfig((c) => ({ ...c, corpus: c.corpus ? c.corpus + "\n" + corpusText : corpusText }));
     setLLMPlaying(false);
     textWorkerRef.current?.postMessage({
       type: "reset",
@@ -939,14 +989,12 @@ export default function App() {
 
           <div className="flex items-center gap-2 shrink-0">
             {/* WebGPU status badge */}
-            {webGpuAvailable !== null && (
-              <div className="hidden md:flex items-center gap-1.5 h-6 px-2.5 rounded-lg border border-white/[0.05] bg-white/[0.02]">
-                {webGpuAvailable
-                  ? <><Monitor className="size-2.5 text-[#30D158]/70" /><span className="text-[9px] font-medium text-[#30D158]/60 tracking-wide">[WebGPU Acceleration Active]</span></>
-                  : <><Server className="size-2.5 text-white/22" /><span className="text-[9px] font-medium text-white/22 tracking-wide">[CPU Thread Pool Active]</span></>
+            <div className="hidden md:flex items-center gap-1.5 h-6 px-2.5 rounded-lg border border-white/[0.05] bg-white/[0.02]">
+                {workerGpuActive
+                  ? <><Monitor className="size-2.5 text-[#30D158]/70" /><span className="text-[9px] font-medium text-[#30D158]/60 tracking-wide">[WebGPU Accelerated]</span></>
+                  : <><Server className="size-2.5 text-white/22" /><span className="text-[9px] font-medium text-white/22 tracking-wide">[CPU Engine Active (Safe Mode)]</span></>
                 }
               </div>
-            )}
             {llmPlaying && (
               <div className="hidden md:flex items-center gap-3 mr-1">
                 <div className="flex items-center gap-1.5">
@@ -1109,7 +1157,7 @@ export default function App() {
                         <label className="text-[11px] text-white/32 font-medium">Hidden Layers</label>
                         <span className="text-[11px] tabular-nums text-white/58 font-mono">{numHiddenLayers}</span>
                       </div>
-                      <Slider min={1} max={8} step={1} value={[numHiddenLayers]} onValueChange={([v]) => setNumHiddenLayers(v)} className="py-2" />
+                      <Slider min={1} max={12} step={1} value={[numHiddenLayers]} onValueChange={([v]) => setNumHiddenLayers(v)} className="py-2" />
                     </div>
 
                     {/* Embed dim slider */}
@@ -1187,7 +1235,7 @@ export default function App() {
 
                         <SliderRow
                           label="Hidden Layers" display={String(numHiddenLayers)}
-                          value={numHiddenLayers} min={1} max={8} step={1}
+                          value={numHiddenLayers} min={1} max={12} step={1}
                           onChange={(v) => setNumHiddenLayers(v)}
                         />
                         <SliderRow
@@ -1275,14 +1323,12 @@ export default function App() {
                         </div>
                         <Slider min={1} max={60} step={1} value={[llmEpochsPerSecond]} onValueChange={handleLLMSpeed} className="py-1" />
 
-                        {webGpuAvailable !== null && (
-                          <div className={`flex items-center gap-2 rounded-lg px-2.5 py-2 border ${webGpuAvailable ? "bg-[#30D158]/[0.03] border-[#30D158]/10" : "bg-white/[0.02] border-white/[0.04]"}`}>
-                            {webGpuAvailable
-                              ? <><div className="size-1.5 rounded-full bg-[#30D158] animate-pulse shrink-0" /><span className="text-[10px] font-medium text-[#30D158]/65">[WebGPU Acceleration Active]</span></>
-                              : <><div className="size-1.5 rounded-full bg-white/20 shrink-0" /><span className="text-[10px] font-medium text-white/22">[CPU Thread Pool Active]</span></>
+                        <div className={`flex items-center gap-2 rounded-lg px-2.5 py-2 border ${workerGpuActive ? "bg-[#30D158]/[0.03] border-[#30D158]/10" : "bg-white/[0.02] border-white/[0.04]"}`}>
+                            {workerGpuActive
+                              ? <><div className="size-1.5 rounded-full bg-[#30D158] animate-pulse shrink-0" /><span className="text-[10px] font-medium text-[#30D158]/65">[WebGPU Accelerated]</span></>
+                              : <><div className="size-1.5 rounded-full bg-white/20 shrink-0" /><span className="text-[10px] font-medium text-white/22">[CPU Engine Active (Safe Mode)]</span></>
                             }
                           </div>
-                        )}
                       </div>
 
                       {/* ─── §3 Data Ingestion Matrix ────────────────────────── */}
@@ -1395,6 +1441,18 @@ export default function App() {
                       </TelemetryCard>
 
                       <TelemetryCard
+                        label="Perplexity"
+                        value={textSnap.loss > 0 ? Math.exp(textSnap.loss).toFixed(2) : "—"}
+                        sub={perplexityHistory.length > 3
+                          ? (perplexityHistory[perplexityHistory.length - 1] < perplexityHistory[Math.floor(perplexityHistory.length / 2)] ? "↓ improving" : "→ plateauing")
+                          : "exp(loss)"}
+                        active={llmPlaying}
+                        accent={false}
+                      >
+                        {perplexityHistory.length > 3 && <SparkLine data={perplexityHistory} color="rgba(48,209,88,0.45)" />}
+                      </TelemetryCard>
+
+                      <TelemetryCard
                         label="Epoch Counter"
                         value={textSnap.epoch > 0 ? textSnap.epoch.toLocaleString() : "—"}
                         sub={textSnap.trainedSamples > 0
@@ -1477,7 +1535,7 @@ export default function App() {
                 modelOptions={llmModels.map((m) => ({ id: m.id, label: m.name }))}
                 onSelectModel={(id) => {
                   const m = savedModels.find((s) => s.id === id);
-                  if (m) { handleLoadModel(m); setTab("train"); setTrainStep("training"); }
+                  if (m) handleLoadModel(m);
                 }}
               />
             </div>
@@ -1539,7 +1597,7 @@ export default function App() {
             </button>
           </div>
 
-          <div className="shrink-0 px-5 py-4 border-b border-white/[0.04]">
+          <div className="shrink-0 px-5 py-3 border-b border-white/[0.04] space-y-3">
             <div className="grid grid-cols-3 gap-3">
               {[
                 {
@@ -1551,8 +1609,8 @@ export default function App() {
                       : String(estimatedLLMParams),
                 },
                 {
-                  label: "Required Tokens",
-                  value: estimatedLLMParams < 1_000_000 ? "~4.2K" : estimatedLLMParams < 10_000_000 ? "~10.6K" : "~21.3K",
+                  label: "Token Target",
+                  value: `~${Math.round(estimatedLLMParams * 20 / 1000)}K`,
                 },
                 {
                   label: "Architecture Tier",
@@ -1564,6 +1622,40 @@ export default function App() {
                   <div className="text-[15px] font-semibold text-white/80 font-mono">{c.value}</div>
                 </div>
               ))}
+            </div>
+
+            {/* Knowledge Vector Sources */}
+            <div className="rounded-xl bg-[#0a0a0a] border border-white/[0.05] px-3 py-2.5 space-y-2">
+              <div className="text-[9px] text-white/20 uppercase tracking-[0.12em] font-semibold">Knowledge Vector Sources</div>
+              <div className="flex items-center gap-4 flex-wrap">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={matrixWikiEnabled} onChange={(e) => setMatrixWikiEnabled(e.target.checked)}
+                    className="sr-only" />
+                  <div className={`w-8 h-4 rounded-full border transition-all relative ${matrixWikiEnabled ? "bg-[#0A84FF] border-[#0A84FF]/50" : "bg-white/[0.05] border-white/[0.10]"}`}>
+                    <span className="absolute top-[3px] size-[10px] rounded-full bg-white shadow-sm transition-transform"
+                      style={{ left: matrixWikiEnabled ? "calc(100% - 13px)" : "3px" }} />
+                  </div>
+                  <span className="text-[10px] text-white/55 font-medium">Wikipedia (Core Science / History)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={matrixDictEnabled} onChange={(e) => setMatrixDictEnabled(e.target.checked)}
+                    className="sr-only" />
+                  <div className={`w-8 h-4 rounded-full border transition-all relative ${matrixDictEnabled ? "bg-[#0A84FF] border-[#0A84FF]/50" : "bg-white/[0.05] border-white/[0.10]"}`}>
+                    <span className="absolute top-[3px] size-[10px] rounded-full bg-white shadow-sm transition-transform"
+                      style={{ left: matrixDictEnabled ? "calc(100% - 13px)" : "3px" }} />
+                  </div>
+                  <span className="text-[10px] text-white/55 font-medium">Language Dictionary (Grammar / Syntax)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={matrixAutoLoop} onChange={(e) => setMatrixAutoLoop(e.target.checked)}
+                    className="sr-only" />
+                  <div className={`w-8 h-4 rounded-full border transition-all relative ${matrixAutoLoop ? "bg-[#30D158] border-[#30D158]/50" : "bg-white/[0.05] border-white/[0.10]"}`}>
+                    <span className="absolute top-[3px] size-[10px] rounded-full bg-white shadow-sm transition-transform"
+                      style={{ left: matrixAutoLoop ? "calc(100% - 13px)" : "3px" }} />
+                  </div>
+                  <span className="text-[10px] text-white/55 font-medium">Auto-Loop (20 tok/param ratio target)</span>
+                </label>
+              </div>
             </div>
           </div>
 
@@ -1873,7 +1965,7 @@ function TelemetryCard({
   );
 }
 
-function SparkLine({ data }: { data: number[] }) {
+function SparkLine({ data, color = "rgba(10,132,255,0.45)" }: { data: number[]; color?: string }) {
   if (data.length < 2) return null;
   const min = Math.min(...data);
   const max = Math.max(...data);
@@ -1887,7 +1979,7 @@ function SparkLine({ data }: { data: number[] }) {
       <polyline
         points={pts}
         fill="none"
-        stroke="rgba(10,132,255,0.45)"
+        stroke={color}
         strokeWidth={1.5}
         strokeLinecap="round"
         strokeLinejoin="round"

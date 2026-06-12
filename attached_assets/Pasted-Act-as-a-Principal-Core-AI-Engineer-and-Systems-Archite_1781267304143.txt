@@ -1,0 +1,31 @@
+Act as a Principal Core AI Engineer and Systems Architect. I have just imported the "Tiny AI Foundry" repository into this workspace. This is a React-based, browser-native machine learning studio utilizing a WebWorker (`text.worker.ts`) for matrix math. 
+
+Your prime directive: We need to implement a massive infrastructure upgrade. You must refactor the data binding, hardware management, and state persistence layers without breaking the core backpropagation math.
+
+Please read `App.tsx`, `ChatView.tsx`, and `text.worker.ts`, then implement the following five critical upgrades:
+
+### 1. 50-Million Parameter Architecture Expansion
+* **The Upgrade:** To allow true 50M parameter networks, the user must be able to build deeper networks. 
+* **The Fix:** Update the `Hidden Layers` slider configuration in both the Setup screen and the left control matrix to allow a maximum of 12 layers (up from 8). Ensure the parameter calculation dynamically tracks this, which will correctly allow configurations up to ~52.7M parameters.
+
+### 2. IndexedDB Native Model & Dataset Hard-Drive Saving
+* **The Bug:** Navigating away from the training tab or closing the window currently purges the compiled training dataset arrays and active Float32Array model weights.
+* **The Fix:** Integrate native browser IndexedDB storage (using standard `indexedDB` or a lightweight wrapper). 
+* Whenever a model stops training or a dataset is generated, save the raw configuration, vocabulary maps, and matrix weights directly to the local browser hard drive. On application boot or tab navigation, automatically query IndexedDB to re-hydrate the model cards, active sliders, and the entire compiled text corpus.
+
+### 3. Progressive Scraper Matrix & Continuous Compounding
+* **The Upgrade:** Transform the "Autonomous Data Matrix" into an automated, continuous-growth ingestion manager. 
+* **Options:** Add a "Knowledge Vector Sources" selector to the modal with toggles for: `Wikipedia (Core Science/History)` and `Language Dictionary (Grammar/Syntax)`.
+* **Incremental Appending:** Change the scraping execution behavior so it does not overwrite the active database. The scraper must *append* new data blocks to the existing active dataset, expanding the vocabulary (`vocab`) and token count dynamically. 
+* **Auto-Looping:** Implement a target token-ratio lock (e.g., aiming for 20 tokens per parameter). If the user initiates an automated scrape, have the system loop and pull new branching topics until the dataset volume matches the active architecture's capacity.
+
+### 4. Robust WebGPU Lifecycle & Explicit High-Performance CPU Fallback
+* **The Bug:** The WebGPU execution context frequently drops out inside the worker, silently stalling throughput down to single digits.
+* **The Fix:** Rewrite the initialization loop inside `text.worker.ts`. Implement an explicit WebGPU handshake (`await navigator.gpu?.requestAdapter()`). If device creation fails or context is lost during training, immediately trigger a structured fallback to a highly optimized, asynchronous CPU matrix multiplication loop that yields to the main thread to prevent UI freezing.
+* Update the green status badge to dynamically read `[WebGPU Accelerated]` when utilizing the GPU, and `[CPU Engine Active (Safe Mode)]` when running the fallback.
+
+### 5. Chat View Retention & Token Perplexity Analytics
+* **Chat Binding Fix:** In `ChatView.tsx`, fix the model dropdown binding. When a user selects a model profile from the dropdown, DO NOT redirect the user back to the training page. Instead, keep them on the Chat page, instantly load that model's weights into the generation worker from IndexedDB, and unlock the chat input box for streaming interaction.
+* **Perplexity Chart:** Integrate a live token-level Perplexity chart directly beneath the Global Loss curve monitor in the training display. Ensure the worker sends telemetry points frequently during an epoch so both curves update smoothly in real time.
+
+Ensure all file modules compile cleanly under strict TypeScript guidelines with absolutely zero layout overlap or broken state parameters.

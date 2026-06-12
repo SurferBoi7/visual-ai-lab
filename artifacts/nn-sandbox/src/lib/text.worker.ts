@@ -115,6 +115,28 @@ function applyTopK(probs: Float32Array, k: number): Float32Array {
   return out;
 }
 
+// ── WebGPU lifecycle handshake ──────────────────────────────────────────────
+// Attempt to acquire a WebGPU adapter. Browsers that support WebGPU will
+// resolve with an adapter object; unsupported environments (or ones where the
+// GPU context was lost) resolve with null. We report the result to the main
+// thread via a `gpuStatus` message so the UI badge always reflects reality.
+// The training math itself remains CPU-based (pure TypeScript matrix ops) —
+// this handshake just probes availability and prevents the silent stall that
+// occurs when the main thread assumes GPU is active while the worker is not.
+let gpuActive = false;
+(async () => {
+  try {
+    const gpu = (self as unknown as { navigator?: { gpu?: { requestAdapter: () => Promise<unknown> } } }).navigator?.gpu;
+    if (gpu) {
+      const adapter = await gpu.requestAdapter();
+      gpuActive = adapter !== null;
+    }
+  } catch {
+    gpuActive = false;
+  }
+  postMessage({ type: "gpuStatus", active: gpuActive });
+})();
+
 let net: TextNetwork | null = null;
 let inputs: number[][] = [];
 let targets: number[] = [];
