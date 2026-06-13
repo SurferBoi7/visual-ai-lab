@@ -691,17 +691,41 @@ export default function App() {
   // Creates a clean, named model record in IndexedDB BEFORE entering the
   // Training Lab — so the model has an identity from the very first second.
   const handleIdentitySubmit = async (name: string, emoji: string, description: string) => {
+    // ── Hard-reset all shared state to pure defaults so no data from a
+    // previously active model can bleed into the new model's workspace. ──────
+    const freshDatasets: Dataset[] = [
+      { id: 1, name: "Base Training", text: DEFAULT_CORPUS, active: true },
+    ];
+    const freshConfig: LLMConfig = {
+      corpus: DEFAULT_CORPUS,
+      contextSize: 3,
+      hiddenSize: 24,
+      learningRate: 0.1,
+      temperature: 0.6,
+      tokenization: "char",
+      topK: 5,
+      systemPrompt: "",
+    };
+    setDatasets(freshDatasets);
+    setLLMConfig(freshConfig);
+    setLossHistory([]);
+    setPerplexityHistory([]);
+    setNumHiddenLayers(2);
+    setMessages([]);
     setLLMPlaying(false);
+
+    // Worker reset uses the clean default corpus — NOT effectiveCorpus which
+    // is derived from the previous model's dataset state.
     textWorkerRef.current?.postMessage({
       type: "reset",
       opts: {
-        corpus: effectiveCorpus,
-        contextSize: llmConfig.contextSize,
-        hiddenSize: llmConfig.hiddenSize,
-        learningRate: llmConfig.learningRate,
-        temperature: llmConfig.temperature,
-        tokenization: llmConfig.tokenization,
-        topK: llmConfig.topK,
+        corpus: DEFAULT_CORPUS,
+        contextSize: freshConfig.contextSize,
+        hiddenSize: freshConfig.hiddenSize,
+        learningRate: freshConfig.learningRate,
+        temperature: freshConfig.temperature,
+        tokenization: freshConfig.tokenization,
+        topK: freshConfig.topK,
       },
     });
 
@@ -719,7 +743,6 @@ export default function App() {
     await saveModel(model);
     setLibraryRefresh((v) => v + 1);
     currentModelIdRef.current = model.id;
-    setMessages([]);
     setIdentityModalOpen(false);
     setTrainStep("training");
     toast({ title: `${emoji} ${name} initialized`, description: "Model created — ready to train." });
