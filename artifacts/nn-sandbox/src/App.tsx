@@ -375,6 +375,7 @@ export default function App() {
   const [proBusy, setProBusy] = useState(false);
   const [proStatus, setProStatus] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
+  const [removingDatasetIds, setRemovingDatasetIds] = useState<Set<number>>(new Set());
   const [datasetExplorerOpen, setDatasetExplorerOpen] = useState(false);
   const [explorerTab, setExplorerTab] = useState<"datasets" | "corpus">("datasets");
   const [expandedDatasets, setExpandedDatasets] = useState<Set<number>>(new Set());
@@ -934,6 +935,50 @@ export default function App() {
 
     setMatrixStreaming(false);
     setMatrixCommitReady(true);
+  };
+
+  // Re-syncs the worker from an arbitrary datasets snapshot without adding
+  // new data — used by the Dataset Manager toggle and delete handlers.
+  const syncWorkerFromDatasets = (updatedDatasets: Dataset[]) => {
+    setDatasets(updatedDatasets);
+    const activeDatasets = updatedDatasets.filter((d) => d.active);
+    const corpusDatasets = activeDatasets.map((d) => d.text);
+    const combinedCorpus = corpusDatasets.join("\n");
+    setLLMPlaying(false);
+    textWorkerRef.current?.postMessage({
+      type: "reset",
+      opts: {
+        corpus: combinedCorpus,
+        corpusDatasets: corpusDatasets.length > 1 ? corpusDatasets : undefined,
+        contextSize: llmConfig.contextSize,
+        hiddenSize: llmConfig.hiddenSize,
+        learningRate: llmConfig.learningRate,
+        temperature: llmConfig.temperature,
+        tokenization: llmConfig.tokenization,
+        topK: llmConfig.topK,
+      },
+    });
+  };
+
+  // Toggle a dataset's active state and immediately push the updated
+  // interleaved corpus to the worker.
+  const toggleDatasetActive = (id: number) => {
+    const updated = datasets.map((d) => d.id === id ? { ...d, active: !d.active } : d);
+    syncWorkerFromDatasets(updated);
+  };
+
+  // Animate a dataset row out (300 ms), then splice it and re-sync.
+  const deleteDataset = (id: number) => {
+    setRemovingDatasetIds((prev) => new Set([...prev, id]));
+    setTimeout(() => {
+      setRemovingDatasetIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      const updated = datasets.filter((d) => d.id !== id);
+      syncWorkerFromDatasets(updated);
+    }, 300);
   };
 
   // Shared helper used by both Pro Hub features: appends a new dataset and
@@ -2157,6 +2202,90 @@ export default function App() {
                   </div>
                 </div>
               )}
+
+              {/* ── Dataset Manager ── */}
+              <div className="space-y-2.5">
+                <div className="text-[9px] text-white/25 uppercase tracking-[0.14em] font-semibold flex items-center gap-1.5">
+                  <Layers className="size-3 shrink-0" />
+                  Active Training Pool Management
+                </div>
+
+                {datasets.length === 0 ? (
+                  <div className="rounded-xl border border-white/[0.05] bg-[#080808] px-4 py-5 text-center">
+                    <div className="text-[11px] text-white/20">No datasets currently staged in the interleaved pool.</div>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {datasets.map((d) => {
+                      const isDomain = d.name.startsWith("Domain: ");
+                      const sizeKB = (d.text.length / 1024).toFixed(1);
+                      const isRemoving = removingDatasetIds.has(d.id);
+                      return (
+                        <div
+                          key={d.id}
+                          className={`rounded-xl border flex items-center gap-3 px-3.5 py-2.5 transition-all duration-300 ${
+                            isRemoving
+                              ? "opacity-0 scale-y-[0.96] border-white/[0.03] bg-transparent"
+                              : d.active
+                                ? "opacity-100 border-white/[0.07] bg-[#0d0d0d]"
+                                : "opacity-50 border-white/[0.04] bg-[#090909]"
+                          }`}
+                        >
+                          {/* Source icon */}
+                          <div className={`size-7 rounded-lg flex items-center justify-center shrink-0 ${
+                            isDomain
+                              ? "bg-[#0A84FF]/10 border border-[#0A84FF]/18"
+                              : "bg-[#30D158]/10 border border-[#30D158]/18"
+                          }`}>
+                            {isDomain
+                              ? <Database className="size-3 text-[#0A84FF]/55" />
+                              : <FileText className="size-3 text-[#30D158]/55" />
+                            }
+                          </div>
+
+                          {/* Metadata */}
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[11px] font-medium text-white/72 truncate">{d.name}</div>
+                            <div className="text-[9px] text-white/25 font-mono mt-0.5">
+                              {sizeKB} KB · {isDomain ? "domain preset" : "file upload"}
+                            </div>
+                          </div>
+
+                          {/* Active toggle */}
+                          <button
+                            onClick={() => toggleDatasetActive(d.id)}
+                            disabled={isRemoving}
+                            title={d.active ? "Exclude from training" : "Include in training"}
+                            className="shrink-0 disabled:pointer-events-none"
+                          >
+                            <div className={`w-8 h-4 rounded-full border transition-all relative ${
+                              d.active
+                                ? "bg-[#0A84FF] border-[#0A84FF]/50"
+                                : "bg-white/[0.05] border-white/[0.10]"
+                            }`}>
+                              <span
+                                className="absolute top-[3px] size-[10px] rounded-full bg-white shadow-sm transition-transform"
+                                style={{ left: d.active ? "calc(100% - 13px)" : "3px" }}
+                              />
+                            </div>
+                          </button>
+
+                          {/* Delete button */}
+                          <button
+                            onClick={() => deleteDataset(d.id)}
+                            disabled={isRemoving}
+                            title="Remove from pool"
+                            className="shrink-0 size-6 rounded-lg flex items-center justify-center text-white/18 hover:text-red-400/70 hover:bg-red-400/[0.08] transition-all disabled:opacity-30 disabled:pointer-events-none"
+                          >
+                            <Trash2 className="size-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
             </div>
           )}
 
