@@ -1,0 +1,24 @@
+Act as a Principal Core AI Engineer and UI Architect. I have just imported the "Tiny AI Foundry" repository into this fresh workspace. 
+
+### SYSTEM CONTEXT (READ FIRST)
+This is a React-based, browser-native machine learning studio. 
+1. Architecture: It relies on a WebWorker (`text.worker.ts`) for heavy matrix math (WebGPU/CPU fallback). 
+2. Persistence: It uses IndexedDB (`storage.ts`) to save models. 
+3. UI Routing: It uses a "Library-First" architecture. The home screen is `LibraryView.tsx`. Clicking "Retrain" on a model card opens the Training Lab, hydrating the React state (`llmConfig`, `datasets`) and worker matrices from IndexedDB.
+
+Your prime directive: We need to implement two massive upgrades to fix a dual-save bug and implement Continual Learning (preventing Catastrophic Forgetting).
+
+Please implement the following two phases:
+
+### PHASE 1: "Identity-First" Initialization (Fixing the Double Save)
+* **The Bug:** Clicking "Create New Base Model" currently creates an anonymous ghost model. Saving it later prompts the user for a name/emoji, resulting in a duplicate model being saved.
+* **The Fix (Library UI):** In `LibraryView.tsx`, when the user clicks the "Create New Base Model" card, immediately pop up the `SaveModal` (Name, Emoji, Description). 
+* **The Fix (App State):** Once submitted, create a clean, empty model record in IndexedDB with these details *first*, and immediately route the user into the Training Lab with this new `modelId` active.
+* **The Fix (Silent Save):** Inside the Training Lab, the "Save Model Snapshot" button should no longer open a modal. Since the model already has an identity, clicking "Save" should silently update the existing IndexedDB record (saving the current `llmConfig`, active `datasets`, and worker weights) and display a quick "Model Updated" success toast or checkmark, then return to the Library.
+
+### PHASE 2: The Smart Scraper & Interleaved Continual Learning
+* **The Scraper Upgrade:** Upgrade the Data Ingestion Matrix. Add an input field for "Knowledge Topic" (e.g., General Knowledge, Coding). When scraping begins, calculate the ideal token target based on Chinchilla Scaling Laws: `Target = Est. Parameters * 20`. The scraper should autonomously loop and fetch articles on the given topic until this exact token count is reached.
+* **Dataset Appending:** When a new topic is scraped and committed, it MUST append to the `datasets` array, never overwrite. This allows the model to hold both "General Knowledge" and "Coding" datasets simultaneously.
+* **The Interleaving Trainer (Anti-Forgetting):** Modify the training loop inside `text.worker.ts`. If multiple datasets exist in the corpus, the worker must physically interleave or shuffle the training batches (e.g., Batch 1 = General Knowledge, Batch 2 = Coding). DO NOT train sequentially (all of Dataset A, then all of Dataset B), as this causes Catastrophic Forgetting. By interleaving the backpropagation, the model will expand its capabilities to learn the new jigsaw puzzle piece without overwriting the old ones.
+
+Ensure all modifications are cleanly typed with strict TypeScript, maintain the dark-mode aesthetic, and compile with 0 errors.

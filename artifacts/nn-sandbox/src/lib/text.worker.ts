@@ -17,30 +17,10 @@ import {
 
 // Inference stop sequence — when the model "starts speaking as the user", we
 // cut generation off so the chat reply doesn't run into the next turn.
-//
-// The text normalizer lowercases everything and strips punctuation, so
-// "User:" in the training corpus becomes the plain token "user". We match
-// both the bare form (first generated token) and the space-prefixed form
-// (mid-sequence, which is the common case for both char- and word-level
-// tokenization after normalisation collapses whitespace).
 const STOP_SEQUENCES = ["user", " user"];
 
-// Lowercase, strip punctuation, collapse whitespace. Used on every piece of
-// text that flows into the model — both the training corpus and live chat
-// prompts — so the vocabulary stays small and consistent (e.g. "Sky", "sky"
-// and "sky's" all collapse to the single token "sky").
-//
-// IMPORTANT: the literal "<PAD>" and "<EOS>" sentinels must survive
-// normalization intact. A naive `.toLowerCase().replace(/[^\p{L}\p{N}\s]+/u,
-// " ")` would strip the angle brackets and lowercase the body, leaving the
-// bare words "pad" / "eos" — which the vocab builder would then learn as
-// regular content tokens, breaking both the inference output filter and the
-// document-separator / end-of-sequence semantics.
-//
-// To prevent that, split the input on the special-token regex (keeping the
-// matches as their own segments via a capture group), normalize only the
-// real-text chunks, and stitch everything back together with the specials
-// re-inserted with surrounding spaces so they remain stand-alone tokens.
+// Normalize raw text: lowercase, strip punctuation, collapse whitespace.
+// Preserves <PAD> and <EOS> special tokens.
 export function normalizeText(text: string): string {
   const cleanChunk = (s: string) =>
     s
@@ -51,9 +31,6 @@ export function normalizeText(text: string): string {
   if (!text.includes(PAD_TOKEN) && !text.includes(EOS_TOKEN)) {
     return cleanChunk(text);
   }
-  // String#split with a capture group keeps the matched delimiter as its own
-  // array element, so `"a<PAD>b<EOS>c".split(/(<PAD>|<EOS>)/)` →
-  // `["a", "<PAD>", "b", "<EOS>", "c"]`.
   const parts = text.split(/(<PAD>|<EOS>)/g);
   return parts
     .map((p) => (p === PAD_TOKEN || p === EOS_TOKEN ? ` ${p} ` : cleanChunk(p)))
@@ -73,6 +50,10 @@ function findStopCut(text: string): number {
 
 interface InitOpts {
   corpus: string;
+  // Optional per-dataset corpora for interleaved continual learning.
+  // When provided (and length > 1), trainEpoch round-robins across datasets
+  // so no single dataset dominates gradient updates (anti-catastrophic-forgetting).
+  corpusDatasets?: string[];
   contextSize: number;
   hiddenSize: number;
   learningRate: number;
@@ -81,22 +62,14 @@ interface InitOpts {
   topK?: number;
 }
 
-// Detect tokenization mode for older saved models that pre-date the
-// `tokenization` field. If any vocab entry is longer than a single character,
-// it can only have been produced by the word-level tokenizer.
 function inferTokenizationFromVocab(vocabArr: string[]): Tokenization {
   for (const t of vocabArr) {
-    // Skip the special <PAD> / <EOS> sentinels — every vocab now contains
-    // them regardless of tokenization mode, so they can't be used as a signal.
     if (t === PAD_TOKEN || t === EOS_TOKEN) continue;
     if (typeof t === "string" && t.length > 1) return "word";
   }
   return "char";
 }
 
-// Keep only the K most-likely tokens, zero out the rest, and renormalize so
-// the surviving probabilities sum to 1.0. Returns a new Float32Array — the
-// original `probs` is left untouched in case the caller still needs it.
 function applyTopK(probs: Float32Array, k: number): Float32Array {
   if (!Number.isFinite(k) || k <= 0 || k >= probs.length) return probs;
   const indexed: { i: number; p: number }[] = new Array(probs.length);
@@ -116,13 +89,6 @@ function applyTopK(probs: Float32Array, k: number): Float32Array {
 }
 
 // ── WebGPU lifecycle handshake ──────────────────────────────────────────────
-// Attempt to acquire a WebGPU adapter. Browsers that support WebGPU will
-// resolve with an adapter object; unsupported environments (or ones where the
-// GPU context was lost) resolve with null. We report the result to the main
-// thread via a `gpuStatus` message so the UI badge always reflects reality.
-// The training math itself remains CPU-based (pure TypeScript matrix ops) —
-// this handshake just probes availability and prevents the silent stall that
-// occurs when the main thread assumes GPU is active while the worker is not.
 let gpuActive = false;
 (async () => {
   try {
@@ -137,6 +103,46 @@ let gpuActive = false;
   postMessage({ type: "gpuStatus", active: gpuActive });
 })();
 
+// ── Per-dataset window set for interleaved training ─────────────────────────
+// Each entry holds the windows extracted from one source dataset, plus its
+// own shuffle-cursor so interleaving is truly round-robin rather than
+// accidentally serializing datasets.
+interface DatasetWindowSet {
+  inputs: number[][];
+  targets: number[];
+  order: number[];
+  cursor: number;
+}
+
+let datasetWindowSets: DatasetWindowSet[] = [];
+
+function shuffleSet(ds: DatasetWindowSet) {
+  ds.order = ds.inputs.map((_, i) => i);
+  for (let i = ds.order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [ds.order[i], ds.order[j]] = [ds.order[j], ds.order[i]];
+  }
+  ds.cursor = 0;
+}
+
+function buildDatasetWindowSet(
+  rawCorpus: string,
+  contextSize: number,
+): DatasetWindowSet | null {
+  const normalized = normalizeText(rawCorpus);
+  const tokens = tokenize(normalized.length > 0 ? normalized : " ", tokenization);
+  if (tokens.length === 0) return null;
+  // Build windows using the shared global vocab (stoi) so all datasets map to
+  // the same token ids — the vocab must have been built from the combined
+  // corpus before calling this function.
+  const w = makeWindows(tokens, stoi, contextSize);
+  if (w.inputs.length === 0) return null;
+  const ds: DatasetWindowSet = { inputs: w.inputs, targets: w.targets, order: [], cursor: 0 };
+  shuffleSet(ds);
+  return ds;
+}
+
+// ── Global training state ───────────────────────────────────────────────────
 let net: TextNetwork | null = null;
 let inputs: number[][] = [];
 let targets: number[] = [];
@@ -146,7 +152,7 @@ let corpus = "";
 let corpusTokens: string[] = [];
 let tokenization: Tokenization = "char";
 let temperature = 0.8;
-let topK = 0; // 0 = disabled (sample from full distribution)
+let topK = 0;
 
 let epoch = 0;
 let lossEMA = 0;
@@ -167,27 +173,47 @@ function shuffleOrder() {
 }
 
 function init(opts: InitOpts) {
-  // Normalize the training corpus before vocab/window construction so the
-  // model only ever sees lowercase, punctuation-free tokens.
-  const normalized = normalizeText(opts.corpus);
-  corpus = normalized.length > 0 ? normalized : " ";
   tokenization = opts.tokenization ?? "char";
   temperature = opts.temperature;
   if (typeof opts.topK === "number") topK = opts.topK;
+
+  const rawDatasets: string[] = (opts.corpusDatasets && opts.corpusDatasets.length > 0)
+    ? opts.corpusDatasets
+    : [opts.corpus];
+
+  // Build vocab from the FULL combined corpus so all per-dataset windows
+  // share the same token-id space.
+  const combinedRaw = rawDatasets.join(" ");
+  const normalized = normalizeText(combinedRaw);
+  corpus = normalized.length > 0 ? normalized : " ";
   corpusTokens = tokenize(corpus, tokenization);
   if (corpusTokens.length === 0) corpusTokens = [" "];
+
   const v = buildVocab(corpusTokens);
   vocab = v.chars;
   stoi = v.stoi;
+
+  // Full combined windows (used for single-dataset fallback and snapshots).
   const w = makeWindows(corpusTokens, stoi, opts.contextSize);
   inputs = w.inputs;
   targets = w.targets;
+
+  // Build per-dataset window sets when multiple corpora are given.
+  if (rawDatasets.length > 1) {
+    datasetWindowSets = rawDatasets
+      .map((raw) => buildDatasetWindowSet(raw, opts.contextSize))
+      .filter((ds): ds is DatasetWindowSet => ds !== null);
+  } else {
+    datasetWindowSets = [];
+  }
+
   net = new TextNetwork({
     vocabSize: vocab.length,
     contextSize: opts.contextSize,
     hiddenSize: opts.hiddenSize,
     learningRate: opts.learningRate,
   });
+
   epoch = 0;
   lossEMA = Math.log(Math.max(2, vocab.length));
   trainedSamples = 0;
@@ -196,19 +222,55 @@ function init(opts: InitOpts) {
   emitSnapshot();
 }
 
+// ── Training epoch ──────────────────────────────────────────────────────────
+// When datasetWindowSets has > 1 entry (multiple corpora), we interleave
+// one step from each dataset per inner iteration.  This implements the
+// "jigsaw-puzzle" training strategy that prevents Catastrophic Forgetting:
+// each gradient update sees all knowledge sources simultaneously, so the
+// model cannot overwrite one domain's weights while learning another.
+//
+// When only one dataset exists (or the model was loaded from weights), the
+// original shuffle-cursor approach is used unchanged.
 function trainEpoch() {
-  if (!net || inputs.length === 0) return;
+  if (!net) return;
   if (trainStartedAt === 0) trainStartedAt = performance.now();
-  let total = 0;
-  for (let i = 0; i < inputs.length; i++) {
-    if (cursor >= order.length) shuffleOrder();
-    const idx = order[cursor++];
-    total += net.trainStep(inputs[idx], targets[idx]);
-    trainedSamples++;
+
+  if (datasetWindowSets.length > 1) {
+    // Interleaved multi-dataset path.
+    // We compute steps as the average dataset size so every epoch is
+    // roughly the same cost regardless of dataset count.
+    const totalInputs = datasetWindowSets.reduce((acc, ds) => acc + ds.inputs.length, 0);
+    const avgSize = Math.max(1, Math.ceil(totalInputs / datasetWindowSets.length));
+    let total = 0;
+    let count = 0;
+
+    for (let step = 0; step < avgSize; step++) {
+      for (const ds of datasetWindowSets) {
+        if (ds.cursor >= ds.order.length) shuffleSet(ds);
+        const idx = ds.order[ds.cursor++];
+        total += net.trainStep(ds.inputs[idx], ds.targets[idx]);
+        trainedSamples++;
+        count++;
+      }
+    }
+
+    const avg = count > 0 ? total / count : 0;
+    lossEMA = epoch === 0 ? avg : lossEMA * 0.7 + avg * 0.3;
+    epoch++;
+  } else {
+    // Original single-dataset shuffle path.
+    if (inputs.length === 0) return;
+    let total = 0;
+    for (let i = 0; i < inputs.length; i++) {
+      if (cursor >= order.length) shuffleOrder();
+      const idx = order[cursor++];
+      total += net.trainStep(inputs[idx], targets[idx]);
+      trainedSamples++;
+    }
+    const avg = total / inputs.length;
+    lossEMA = epoch === 0 ? avg : lossEMA * 0.7 + avg * 0.3;
+    epoch++;
   }
-  const avg = total / inputs.length;
-  lossEMA = epoch === 0 ? avg : lossEMA * 0.7 + avg * 0.3;
-  epoch++;
 }
 
 function pickSeedTokens(): string[] {
@@ -223,14 +285,7 @@ function pickSeedTokens(): string[] {
 function makeSample(length = 32): string {
   if (!net) return "";
   const seed = pickSeedTokens();
-  const generated = generateTokens(
-    net,
-    vocab,
-    stoi,
-    seed,
-    length,
-    temperature,
-  );
+  const generated = generateTokens(net, vocab, stoi, seed, length, temperature);
   return joinTokens([...seed, ...generated], tokenization);
 }
 
@@ -344,80 +399,41 @@ self.onmessage = (e: MessageEvent) => {
     }
     case "generate": {
       if (!net) {
-        postMessage({
-          type: "generation",
-          id: msg.id,
-          text: "(model not ready — try training first)",
-        });
+        postMessage({ type: "generation", id: msg.id, text: "(model not ready — try training first)" });
         break;
       }
-      // Normalize the user's prompt the exact same way we normalized the
-      // training corpus so the seed lands in the model's known vocabulary
-      // (e.g. "What is the Sky's colour?" → "what is the skys colour").
       const seedTokens = tokenize(normalizeText(msg.seed ?? ""), tokenization);
       const length = msg.length ?? 300;
       const temp = msg.temperature ?? temperature;
       const ctxSize = net.config.contextSize;
-      // Prefer the dedicated <PAD> sentinel; fall back to space for legacy
-      // models that pre-date the special token, then to vocab index 0.
       const padId = stoi[PAD_TOKEN] ?? stoi[" "] ?? 0;
-      // EOS id is optional — older saved models pre-date the special token,
-      // so `undefined` here just means "never break early on EOS" for them.
       const eosId = stoi[EOS_TOKEN];
-
-      // Build the rolling context window from the (possibly empty) seed.
-      // If the prompt is shorter than the context window, prepend <PAD>
-      // tokens until it fills the window exactly. This avoids the model
-      // hallucinating from a leftover real-token prefix.
-      const seedIds = seedTokens.map((t) =>
-        stoi[t] !== undefined ? stoi[t] : padId,
-      );
+      const seedIds = seedTokens.map((t) => stoi[t] !== undefined ? stoi[t] : padId);
       let ctx: number[];
       if (seedIds.length >= ctxSize) {
         ctx = seedIds.slice(-ctxSize);
       } else {
         ctx = new Array(ctxSize - seedIds.length).fill(padId).concat(seedIds);
       }
-
-      // Inline generation loop so we can check the stop sequence after each
-      // newly-sampled token and break early when the model "becomes the user".
       const generated: string[] = [];
       let text = "";
       for (let i = 0; i < length; i++) {
         const { probs } = net.forward(ctx);
-        // Top-K filter: zero out everything except the K most-likely tokens
-        // and renormalize, so the model can't sample low-probability junk.
         const filtered = applyTopK(probs, topK);
         const next = sampleFromProbs(filtered, temp);
-        // Hard stop on <EOS>: this is the model's trained "I'm done" signal.
-        // Break BEFORE advancing the context or appending the token so the
-        // sentinel never leaks into the user-visible output.
         if (eosId !== undefined && next === eosId) break;
         const tok = vocab[next];
-        // Always advance the rolling context with the sampled token so the
-        // model's internal state stays coherent, but suppress <PAD> from the
-        // visible chat output — it's an internal sentinel, not real text.
         ctx = ctx.slice(1).concat(next);
         if (tok === PAD_TOKEN) continue;
         generated.push(tok);
-
         text = joinTokens(generated, tokenization);
         const cut = findStopCut(text);
         if (cut !== -1) {
-          // Trim the stop sequence (and any trailing whitespace before it) off
-          // the response so the UI never shows "...thanks  User:".
           text = text.slice(0, cut).replace(/\s+$/, "");
           break;
         }
       }
-
-      // Strip a leading "bot" speaker tag in case the model re-emits it at
-      // the very start of its output (can occur when the seed context window
-      // is short and "bot" falls just outside the attended tokens).  Only
-      // remove it when it appears as an isolated word at position 0 so we
-      // never silently eat legitimate content that starts with "bot".
       const cleaned = text.replace(/^bot\s+/i, "").trim();
-
       postMessage({ type: "generation", id: msg.id, text: cleaned });
       break;
     }
@@ -425,12 +441,6 @@ self.onmessage = (e: MessageEvent) => {
       pause();
       const w = msg.payload;
       if (!w || !w.config || !w.weights || !w.vocab) break;
-      // Restore the tokenization mode first so the corpus is split the same
-      // way it was when this model was originally trained. Older saves
-      // pre-date the `tokenization` field — for those, sniff the vocab: any
-      // entry longer than one character can only have come from word-level
-      // tokenization, so default there instead of falling back to "char"
-      // (which produced the "goodbyehaveaniceday" squished-text bug).
       if (w.tokenization === "word" || w.tokenization === "char") {
         tokenization = w.tokenization;
       } else {
@@ -449,13 +459,16 @@ self.onmessage = (e: MessageEvent) => {
       const wins = makeWindows(corpusTokens, stoi, w.config.contextSize);
       inputs = wins.inputs;
       targets = wins.targets;
+      // Loaded models always use the single-dataset path for training.
+      // When the user adds more datasets, the worker will be reset with
+      // per-dataset corpora via the "reset" message.
+      datasetWindowSets = [];
       net = new TextNetwork({
         vocabSize: w.config.vocabSize,
         contextSize: w.config.contextSize,
         hiddenSize: w.config.hiddenSize,
         learningRate: w.config.learningRate,
       });
-      // Overwrite freshly-randomised parameters with the saved ones.
       for (let j = 0; j < net.W1.length; j++) {
         net.W1[j] = Float32Array.from(w.weights.W1[j]);
       }

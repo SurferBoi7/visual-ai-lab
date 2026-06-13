@@ -1,1 +1,3 @@
 - [Tiny AI Foundry architecture](tiny-ai-foundry.md) — Training Lab dual-column layout, MatrixPulseCore SVG animation, multi-thread ChatView internal state pattern.
+- [Identity-First model flow](identity-first-flow.md) — IdentityModal creates the IndexedDB record before training starts; Save button silently updates existing record via currentModelIdRef.
+- [Interleaved continual learning](interleaved-continual-learning.md) — Worker accepts corpusDatasets[] for round-robin interleaving; commitToEngine must send full combined corpus + corpusDatasets to prevent Catastrophic Forgetting.

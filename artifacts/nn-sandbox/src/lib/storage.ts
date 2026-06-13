@@ -47,6 +47,8 @@ export interface CharLMWeights {
 export interface SavedModel {
   id: string;
   name: string;
+  emoji?: string;
+  description?: string;
   type: SavedModelType;
   date: number;
   paramsCount: number;

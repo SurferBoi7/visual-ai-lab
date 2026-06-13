@@ -35,6 +35,7 @@ import {
 import { ChatView, type ChatMessage } from "@/components/llm/ChatView";
 import { LLMStats } from "@/components/llm/LLMStats";
 import { SaveModal } from "@/components/SaveModal";
+import { IdentityModal } from "@/components/IdentityModal";
 import { DeployHub } from "@/components/llm/DeployHub";
 import {
   getModels,
@@ -376,6 +377,8 @@ export default function App() {
   const [trainStep, setTrainStep] = useState<TrainStep>("fleet");
   const [newModelName, setNewModelName] = useState("");
   const [saveOpen, setSaveOpen] = useState(false);
+  const [identityModalOpen, setIdentityModalOpen] = useState(false);
+  const [knowledgeTopic, setKnowledgeTopic] = useState("");
   const [libraryRefresh, setLibraryRefresh] = useState(0);
   const [savedModels, setSavedModels] = useState<SavedModel[]>([]);
 
@@ -642,6 +645,79 @@ export default function App() {
     setSaveOpen(true);
   };
 
+  // Silent-save: if the model already has an identity (assigned when it was
+  // created via the IdentityModal), update the existing record in-place rather
+  // than opening the name dialog again — no duplicate records, no extra clicks.
+  const handleSilentSave = async () => {
+    if (textSnap.epoch === 0) {
+      toast({ title: "Train first", description: "Run a few epochs before saving." });
+      return;
+    }
+    const w = await requestLLMExport();
+    if (!w) { toast({ title: "Nothing to save", description: "Train first." }); return; }
+
+    const currentId = currentModelIdRef.current;
+    if (currentId) {
+      const existing = savedModels.find((m) => m.id === currentId);
+      const model: SavedModel = {
+        id: currentId,
+        name: existing?.name ?? defaultSaveName(llmModelLabel, textSnap.epoch, llmConfig.tokenization),
+        emoji: existing?.emoji,
+        description: existing?.description,
+        type: "Char-LM",
+        date: Date.now(),
+        paramsCount: textSnap.paramCount,
+        loss: textSnap.loss,
+        epoch: textSnap.epoch,
+        weights: w,
+      };
+      await saveModel(model);
+      setLibraryRefresh((v) => v + 1);
+      toast({ title: "Model updated", description: `Snapshot saved — epoch ${textSnap.epoch.toLocaleString()}.` });
+      setTrainStep("fleet");
+    } else {
+      setSaveOpen(true);
+    }
+  };
+
+  // Called when the user submits the IdentityModal ("Name your model").
+  // Creates a clean, named model record in IndexedDB BEFORE entering the
+  // Training Lab — so the model has an identity from the very first second.
+  const handleIdentitySubmit = async (name: string, emoji: string, description: string) => {
+    setLLMPlaying(false);
+    textWorkerRef.current?.postMessage({
+      type: "reset",
+      opts: {
+        corpus: effectiveCorpus,
+        contextSize: llmConfig.contextSize,
+        hiddenSize: llmConfig.hiddenSize,
+        learningRate: llmConfig.learningRate,
+        temperature: llmConfig.temperature,
+        tokenization: llmConfig.tokenization,
+        topK: llmConfig.topK,
+      },
+    });
+
+    const w = await requestLLMExport();
+    if (!w) {
+      toast({ title: "Initialization failed", description: "Could not initialize model weights." });
+      return;
+    }
+
+    const model: SavedModel = {
+      id: makeId(), name, emoji, description,
+      type: "Char-LM", date: Date.now(),
+      paramsCount: estimatedLLMParams, loss: 0, epoch: 0, weights: w,
+    };
+    await saveModel(model);
+    setLibraryRefresh((v) => v + 1);
+    currentModelIdRef.current = model.id;
+    setMessages([]);
+    setIdentityModalOpen(false);
+    setTrainStep("training");
+    toast({ title: `${emoji} ${name} initialized`, description: "Model created — ready to train." });
+  };
+
   const handleExportFile = async (name: string) => {
     const w = await requestLLMExport();
     if (!w) { toast({ title: "Nothing to export", description: "Train first." }); return; }
@@ -711,107 +787,175 @@ export default function App() {
     toast({ title: "Model created", description: `"${name}" saved to your library.` });
   };
 
-  const executeAutonomousSynthesis = () => {
+  // Smart Scraper: fetches real Wikipedia articles until the Chinchilla-law
+  // token target is reached, then stores the corpus in matrixCorpusRef for
+  // the user to commit.  Token target = params × 20 (Chinchilla Scaling Laws).
+  // Falls back to the synthetic corpus generator if Wikipedia is unreachable.
+  const executeAutonomousSynthesis = async () => {
     if (matrixStreaming) return;
     setMatrixStreaming(true);
     setMatrixStreamLines([]);
     setMatrixCommitReady(false);
 
     const paramCount = estimatedLLMParams;
-    const tier = paramCount < 1_000_000 ? "Micro" : paramCount < 10_000_000 ? "Standard" : "Large-Scale";
-    const targetLines = paramCount < 1_000_000 ? 300 : paramCount < 10_000_000 ? 760 : 1520;
+    // Chinchilla: optimal training tokens ≈ 20× parameter count.
+    // Cap at 80K to avoid excessive API calls in the browser.
+    const tokenTarget = Math.min(paramCount * 20, 80_000);
+    const topic = knowledgeTopic.trim();
 
-    matrixCorpusRef.current = buildSyntheticCorpus(paramCount);
+    const addLine = (line: string) =>
+      setMatrixStreamLines((prev) => [...prev, line]);
 
-    const phases: [string, number][] = [
-      [">> Initializing Autonomous Data Matrix Engine v4.1 ...", 60],
-      [`>> Detected model tier: ${tier} (${paramCount.toLocaleString()} parameters)`, 80],
-      [">> Computing required token volume for base convergence ...", 80],
-      [`>> Target corpus: ~${(targetLines * 14).toLocaleString()} tokens across ${targetLines} training lines`, 120],
-      ["", 60],
-      ["━━━ PHASE 1 — Core Language Patterns ━━━", 200],
-      ["  >> Scanning base vocabulary frequency distributions ...", 70],
-      ["  >> Mapping unigram entropy across phonological space ...", 70],
-      ["  >> Building bigram association chain tables ...", 70],
-      ["  >> Extracting high-density sentence templates ...", 70],
-      ["  >> Applying smoothed Kneser-Ney interpolation ...", 80],
-      [`  ✓ [Core Language Patterns: ${Math.round(targetLines * 0.22)} lines compiled]`, 150],
-      ["", 60],
-      ["━━━ PHASE 2 — Semantic Association Networks ━━━", 200],
-      ["  >> Initializing word co-occurrence matrix ...", 70],
-      ["  >> Extracting contextual anchor tokens ...", 70],
-      ["  >> Mapping semantic neighbor clusters via cosine proximity ...", 80],
-      ["  >> Generating intent-response templates ...", 70],
-      ["  >> Cross-referencing domain lexicons ...", 70],
-      [`  ✓ [Semantic Associations: ${Math.round(targetLines * 0.24)} lines compiled]`, 150],
-      ["", 60],
-      ["━━━ PHASE 3 — Conversational Flow Templates ━━━", 200],
-      ["  >> Analyzing dialogue state transition graphs ...", 70],
-      ["  >> Generating turn-taking pattern sequences ...", 70],
-      ["  >> Injecting discourse coherence markers ...", 70],
-      ["  >> Synthesizing question-answer alignment pairs ...", 80],
-      [`  ✓ [Conversational Flows: ${Math.round(targetLines * 0.26)} lines compiled]`, 150],
-      ["", 60],
-      ["━━━ PHASE 4 — Knowledge Domain Injection ━━━", 200],
-      ["  >> Loading science and mathematics vocabulary ...", 70],
-      ["  >> Structuring factual Q&A response chains ...", 70],
-      ["  >> Binding domain-specific terminology anchors ...", 70],
-      [`  ✓ [Domain Knowledge: ${Math.round(targetLines * 0.18)} lines compiled]`, 150],
-      ["", 60],
-      ["━━━ PHASE 5 — Token Density Optimization ━━━", 200],
-      ["  >> Scoring per-line entropy distributions ...", 70],
-      ["  >> Pruning low-information-density segments ...", 70],
-      ["  >> Applying Zipfian rebalancing across vocab strata ...", 80],
-      [`  ✓ [Optimized: ${targetLines} lines retained / ${Math.round(targetLines * 1.28).toLocaleString()} scanned]`, 150],
-      ["", 60],
-      ["━━━ PHASE 6 — Worker Buffer Binding ━━━", 200],
-      ["  >> Normalizing text pipeline to lowercase ASCII ...", 70],
-      ["  >> Validating EOS / PAD special-token boundaries ...", 70],
-      ["  >> Pre-computing context window sliding offsets ...", 70],
-      ["  >> Allocating corpus buffer in worker thread heap ...", 80],
-      [`  ✓ [CORPUS READY — ${targetLines} lines | ~${(targetLines * 14).toLocaleString()} tokens]`, 150],
-      ["", 80],
-      ["████████████████████████████████ 100%", 100],
-      ["■ SYNTHESIS COMPLETE — Dataset is ready for engine commit", 60],
-    ];
-
-    // RAF-batched rendering: accumulate lines that fire in the same 16ms frame
-    // into a single setState call to keep the browser completely smooth.
-    const pendingBuf: string[] = [];
-    let rafId: number | null = null;
-    const flushBuf = () => {
-      if (pendingBuf.length > 0) {
-        const toAdd = [...pendingBuf];
-        pendingBuf.length = 0;
-        setMatrixStreamLines((prev) => [...prev, ...toAdd]);
-      }
-      rafId = null;
-    };
-    const addLine = (line: string) => {
-      pendingBuf.push(line);
-      if (!rafId) rafId = requestAnimationFrame(flushBuf);
-    };
-
-    let t = 0;
-    for (const [text, delay] of phases) {
-      t += delay;
-      const captured = text;
-      setTimeout(() => addLine(captured), t);
+    addLine(`>> Smart Scraper v2.0 — Chinchilla Scaling Laws active`);
+    addLine(`>> Model: ${paramCount.toLocaleString()} parameters`);
+    addLine(`>> Token target: ${tokenTarget.toLocaleString()} (${paramCount.toLocaleString()} × 20)`);
+    if (datasets.length > 0) {
+      addLine(`>> Existing datasets: ${datasets.length} — Interleaved Continual Learning will prevent Catastrophic Forgetting`);
     }
-    setTimeout(() => { setMatrixStreaming(false); setMatrixCommitReady(true); }, t + 200);
+    addLine(``);
+
+    if (!matrixWikiEnabled && !topic) {
+      // Pure synthetic fallback when Wikipedia is disabled and no topic set.
+      addLine(`>> Wikipedia disabled — generating synthetic corpus...`);
+      const targetLines = paramCount < 1_000_000 ? 300 : paramCount < 10_000_000 ? 760 : 1520;
+      matrixCorpusRef.current = buildSyntheticCorpus(paramCount);
+      addLine(`  ✓ Synthetic corpus: ${targetLines} lines / ~${(targetLines * 14).toLocaleString()} tokens`);
+      addLine(`■ READY — click "Commit Dataset to Core Engine"`);
+      setMatrixStreaming(false);
+      setMatrixCommitReady(true);
+      return;
+    }
+
+    const searchTopic = topic || "science technology history";
+    addLine(`>> Topic: "${searchTopic}"`);
+    addLine(`>> Querying Wikipedia...`);
+    addLine(``);
+    addLine(`━━━ FETCHING KNOWLEDGE CORPUS ━━━`);
+
+    try {
+      // Step 1: find up to 20 related article titles via opensearch.
+      const searchUrl =
+        `https://en.wikipedia.org/w/api.php?action=opensearch&search=` +
+        `${encodeURIComponent(searchTopic)}&limit=20&format=json&origin=*`;
+      const searchRes = await fetch(searchUrl);
+      if (!searchRes.ok) throw new Error(`Wikipedia search error ${searchRes.status}`);
+      const [, titles] = (await searchRes.json()) as [string, string[], string[], string[]];
+
+      if (!titles || titles.length === 0) {
+        throw new Error(`No articles found for "${searchTopic}"`);
+      }
+
+      addLine(`  >> Found ${titles.length} related articles`);
+
+      let totalTokens = 0;
+      const collectedPairs: string[] = [];
+      const seenTitles = new Set<string>();
+
+      // Helper: fetch one article's summary and push a User/Bot pair.
+      const fetchArticle = async (title: string): Promise<boolean> => {
+        if (seenTitles.has(title)) return false;
+        seenTitles.add(title);
+        try {
+          const res = await fetch(
+            `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`
+          );
+          if (!res.ok) return false;
+          const data = (await res.json()) as { extract?: string };
+          const extract = data.extract ?? "";
+          if (!extract || extract.length < 30) return false;
+          const wordCount = extract.split(/\s+/).filter(Boolean).length;
+          collectedPairs.push(
+            `User: tell me about ${title.toLowerCase()}\nBot: ${extract}`
+          );
+          totalTokens += wordCount;
+          const pct = Math.min(100, Math.round((totalTokens / tokenTarget) * 100));
+          addLine(`  ✓ "${title}" +${wordCount} tokens [${totalTokens.toLocaleString()}/${tokenTarget.toLocaleString()} — ${pct}%]`);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      // Step 2: fetch primary articles.
+      for (const title of titles) {
+        if (totalTokens >= tokenTarget) break;
+        await fetchArticle(title);
+      }
+
+      // Step 3: if still under target, widen search with a related query.
+      if (totalTokens < tokenTarget) {
+        addLine(``);
+        addLine(`  >> Expanding to related subtopics...`);
+        const subUrl =
+          `https://en.wikipedia.org/w/api.php?action=opensearch&search=` +
+          `${encodeURIComponent(searchTopic + " history")}&limit=15&format=json&origin=*`;
+        try {
+          const subRes = await fetch(subUrl);
+          if (subRes.ok) {
+            const [, subTitles] = (await subRes.json()) as [string, string[], string[], string[]];
+            for (const title of (subTitles ?? [])) {
+              if (totalTokens >= tokenTarget) break;
+              await fetchArticle(title);
+            }
+          }
+        } catch { /* silent — we already have something */ }
+      }
+
+      if (collectedPairs.length === 0) {
+        throw new Error("All article fetches failed. Check network connection.");
+      }
+
+      matrixCorpusRef.current = collectedPairs.join("\n\n");
+      addLine(``);
+      addLine(`━━━ SYNTHESIS COMPLETE ━━━`);
+      addLine(`  ✓ ${collectedPairs.length} articles · ~${totalTokens.toLocaleString()} tokens`);
+      addLine(`  ✓ Chinchilla target: ${tokenTarget.toLocaleString()} tokens`);
+      if (datasets.length > 0) {
+        addLine(`  ✓ Round-robin interleaving with ${datasets.length} existing dataset(s) enabled`);
+      }
+      addLine(``);
+      addLine(`■ READY — click "Commit Dataset to Core Engine"`);
+
+    } catch (err) {
+      addLine(``);
+      addLine(`>> Error: ${err instanceof Error ? err.message : "Network error"}`);
+      addLine(`>> Falling back to synthetic corpus generation...`);
+      matrixCorpusRef.current = buildSyntheticCorpus(paramCount);
+      const targetLines = paramCount < 1_000_000 ? 300 : paramCount < 10_000_000 ? 760 : 1520;
+      addLine(`  ✓ Synthetic corpus: ${targetLines} lines / ~${(targetLines * 14).toLocaleString()} tokens`);
+      addLine(`■ READY — click "Commit Dataset to Core Engine"`);
+    }
+
+    setMatrixStreaming(false);
+    setMatrixCommitReady(true);
   };
 
   const commitToEngine = () => {
     const corpusText = matrixCorpusRef.current;
     if (!corpusText) return;
-    const newDataset: Dataset = { id: Date.now(), name: `Matrix Dataset ${new Date().toLocaleTimeString()}`, text: corpusText, active: true };
-    setDatasets((prev) => [...prev, newDataset]);
-    setLLMConfig((c) => ({ ...c, corpus: c.corpus ? c.corpus + "\n" + corpusText : corpusText }));
+
+    const label = knowledgeTopic.trim()
+      ? `${knowledgeTopic.trim()} · ${new Date().toLocaleTimeString()}`
+      : `Matrix Dataset · ${new Date().toLocaleTimeString()}`;
+    const newDataset: Dataset = { id: Date.now(), name: label, text: corpusText, active: true };
+
+    // Compute the post-commit dataset list synchronously so we can send the
+    // full combined corpus to the worker immediately (not just the new text).
+    // This fixes the Catastrophic Forgetting bug: the previous implementation
+    // only sent the newly-added corpus to the worker, erasing prior knowledge.
+    const updatedDatasets = [...datasets, newDataset];
+    setDatasets(updatedDatasets);
+
+    const activeDatasets = updatedDatasets.filter((d) => d.active);
+    const corpusDatasets = activeDatasets.map((d) => d.text);
+    const combinedCorpus = corpusDatasets.join("\n");
+
     setLLMPlaying(false);
     textWorkerRef.current?.postMessage({
       type: "reset",
       opts: {
-        corpus: corpusText,
+        corpus: combinedCorpus,
+        corpusDatasets: corpusDatasets.length > 1 ? corpusDatasets : undefined,
         contextSize: llmConfig.contextSize,
         hiddenSize: llmConfig.hiddenSize,
         learningRate: llmConfig.learningRate,
@@ -824,7 +968,10 @@ export default function App() {
     setMatrixStreamLines([]);
     setMatrixCommitReady(false);
     matrixCorpusRef.current = "";
-    toast({ title: "Corpus committed", description: "Autonomous dataset bound to training engine." });
+    const interleaveMsg = corpusDatasets.length > 1
+      ? `Interleaved training across ${corpusDatasets.length} datasets — Catastrophic Forgetting prevented.`
+      : "Dataset bound to training engine.";
+    toast({ title: "Corpus committed", description: interleaveMsg });
   };
 
   const handleLoadModel = (model: SavedModel) => {
@@ -964,7 +1111,7 @@ export default function App() {
           <button onClick={handleReset} title="Reset model" className="w-full h-9 rounded-xl flex items-center justify-center text-white/25 hover:text-white/65 hover:bg-white/[0.05] border border-white/[0.05] transition-all">
             <RefreshCcw className="size-3.5" />
           </button>
-          <button onClick={handleOpenSave} title="Save model" className="w-full h-9 rounded-xl flex items-center justify-center text-white/25 hover:text-white/65 hover:bg-white/[0.05] border border-white/[0.05] transition-all">
+          <button onClick={handleSilentSave} title="Save model snapshot" className="w-full h-9 rounded-xl flex items-center justify-center text-white/25 hover:text-white/65 hover:bg-white/[0.05] border border-white/[0.05] transition-all">
             <Save className="size-3.5" />
           </button>
         </div>
@@ -1029,7 +1176,7 @@ export default function App() {
               <button onClick={handleReset} className="size-9 rounded-lg border border-white/[0.06] text-white/35 hover:text-white/65 hover:bg-white/[0.05] flex items-center justify-center transition-colors">
                 <RefreshCcw className="size-3.5" />
               </button>
-              <button onClick={handleOpenSave} className="size-9 rounded-lg border border-white/[0.06] text-white/35 hover:text-white/65 hover:bg-white/[0.05] flex items-center justify-center transition-colors">
+              <button onClick={handleSilentSave} className="size-9 rounded-lg border border-white/[0.06] text-white/35 hover:text-white/65 hover:bg-white/[0.05] flex items-center justify-center transition-colors">
                 <Save className="size-3.5" />
               </button>
             </div>
@@ -1064,12 +1211,15 @@ export default function App() {
                         >
                           <div className="p-4">
                             <div className="flex items-start justify-between mb-3">
-                              <div className="size-9 rounded-xl bg-[#0A84FF]/10 border border-[#0A84FF]/15 flex items-center justify-center">
-                                <Brain className="size-4 text-[#0A84FF]/65" />
+                              <div className="size-9 rounded-xl bg-[#0A84FF]/10 border border-[#0A84FF]/15 flex items-center justify-center text-[18px]">
+                                {m.emoji ? m.emoji : <Brain className="size-4 text-[#0A84FF]/65" />}
                               </div>
                               <span className="text-[9px] font-mono text-white/18 tracking-wider uppercase bg-white/[0.04] px-1.5 py-0.5 rounded-md">{m.type}</span>
                             </div>
                             <div className="text-[13px] font-semibold text-white/80 mb-1 truncate leading-snug">{m.name}</div>
+                            {m.description && (
+                              <div className="text-[10px] text-white/28 mb-1 truncate">{m.description}</div>
+                            )}
                             <div className="text-[10px] font-mono text-white/28 tabular-nums">ep {m.epoch} · loss {m.loss.toFixed(3)}</div>
                             <div className="text-[10px] text-white/16 mt-0.5">{new Date(m.date).toLocaleDateString()}</div>
                           </div>
@@ -1082,7 +1232,7 @@ export default function App() {
                         </div>
                       ))}
                       <button
-                        onClick={() => setTrainStep("setup")}
+                        onClick={() => setIdentityModalOpen(true)}
                         className="rounded-2xl border-2 border-dashed border-white/[0.07] hover:border-[#0A84FF]/28 hover:bg-[#0A84FF]/[0.025] transition-all flex flex-col items-center justify-center gap-2.5 min-h-[140px] text-white/22 hover:text-[#0A84FF]/55"
                       >
                         <Plus className="size-6" />
@@ -1389,7 +1539,7 @@ export default function App() {
                         )}
 
                         <button
-                          onClick={() => setTrainStep("setup")}
+                          onClick={() => { setExplorerTab("datasets"); setDatasetExplorerOpen(true); }}
                           className="w-full h-7 rounded-xl border border-dashed border-white/[0.07] hover:border-white/[0.12] text-white/22 hover:text-white/45 text-[10px] font-medium transition-all flex items-center justify-center gap-1.5"
                         >
                           <Plus className="size-3" /> Manage Datasets
@@ -1624,6 +1774,19 @@ export default function App() {
               ))}
             </div>
 
+            {/* Knowledge Topic */}
+            <div className="rounded-xl bg-[#0a0a0a] border border-white/[0.05] px-3 py-2.5 space-y-2">
+              <div className="text-[9px] text-white/20 uppercase tracking-[0.12em] font-semibold">Knowledge Topic <span className="text-white/12 normal-case tracking-normal">(Wikipedia scraper seed)</span></div>
+              <input
+                value={knowledgeTopic}
+                onChange={(e) => setKnowledgeTopic(e.target.value)}
+                placeholder="e.g. quantum mechanics, Roman Empire, machine learning…"
+                maxLength={100}
+                disabled={matrixStreaming}
+                className="w-full h-9 rounded-lg border border-white/[0.06] bg-[#060606] px-3 text-[11px] text-white/70 placeholder:text-white/20 focus:outline-none focus:border-[#0A84FF]/35 transition-colors disabled:opacity-40"
+              />
+            </div>
+
             {/* Knowledge Vector Sources */}
             <div className="rounded-xl bg-[#0a0a0a] border border-white/[0.05] px-3 py-2.5 space-y-2">
               <div className="text-[9px] text-white/20 uppercase tracking-[0.12em] font-semibold">Knowledge Vector Sources</div>
@@ -1826,6 +1989,12 @@ export default function App() {
         onClose={() => setSaveOpen(false)}
         onSaveToLibrary={handleSaveToLibrary}
         onExportFile={handleExportFile}
+      />
+
+      <IdentityModal
+        open={identityModalOpen}
+        onClose={() => setIdentityModalOpen(false)}
+        onSubmit={handleIdentitySubmit}
       />
 
       <Toaster />
