@@ -11,6 +11,8 @@ import {
   Plus,
   Trash2,
   ArrowLeft,
+  ArrowRight,
+  Upload,
   Cpu,
   Database,
   Activity,
@@ -369,6 +371,10 @@ export default function App() {
   const [matrixWikiEnabled, setMatrixWikiEnabled] = useState(true);
   const [matrixDictEnabled, setMatrixDictEnabled] = useState(true);
   const [matrixAutoLoop, setMatrixAutoLoop] = useState(false);
+  const [matrixTab, setMatrixTab] = useState<"standard" | "pro">("standard");
+  const [proBusy, setProBusy] = useState(false);
+  const [proStatus, setProStatus] = useState("");
+  const [isDragOver, setIsDragOver] = useState(false);
   const [datasetExplorerOpen, setDatasetExplorerOpen] = useState(false);
   const [explorerTab, setExplorerTab] = useState<"datasets" | "corpus">("datasets");
   const [expandedDatasets, setExpandedDatasets] = useState<Set<number>>(new Set());
@@ -928,6 +934,154 @@ export default function App() {
 
     setMatrixStreaming(false);
     setMatrixCommitReady(true);
+  };
+
+  // Shared helper used by both Pro Hub features: appends a new dataset and
+  // immediately resets the worker with the full interleaved corpus so the
+  // new data is always combined with — never replacing — existing datasets.
+  const commitProDatasetToEngine = (name: string, text: string) => {
+    const newDataset: Dataset = { id: Date.now(), name, text, active: true };
+    const updatedDatasets = [...datasets, newDataset];
+    setDatasets(updatedDatasets);
+    const activeDatasets = updatedDatasets.filter((d) => d.active);
+    const corpusDatasets = activeDatasets.map((d) => d.text);
+    const combinedCorpus = corpusDatasets.join("\n");
+    setLLMPlaying(false);
+    textWorkerRef.current?.postMessage({
+      type: "reset",
+      opts: {
+        corpus: combinedCorpus,
+        corpusDatasets: corpusDatasets.length > 1 ? corpusDatasets : undefined,
+        contextSize: llmConfig.contextSize,
+        hiddenSize: llmConfig.hiddenSize,
+        learningRate: llmConfig.learningRate,
+        temperature: llmConfig.temperature,
+        tokenization: llmConfig.tokenization,
+        topK: llmConfig.topK,
+      },
+    });
+  };
+
+  // Pro Hub Feature A: File Uploader.
+  // Reads .txt / .md via the browser's FileReader API (async, non-blocking),
+  // sanitizes non-printable characters and excessive whitespace,
+  // caps at 5 MB to prevent Chrome OOM, then commits as a new dataset.
+  const handleFileUpload = (file: File) => {
+    if (!file) return;
+    const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+    if (ext !== ".txt" && ext !== ".md") {
+      toast({ title: "Unsupported file", description: "Only .txt and .md files are accepted." });
+      return;
+    }
+    setProBusy(true);
+    setProStatus(`Reading ${file.name}…`);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        let raw = (ev.target?.result as string) ?? "";
+        const MAX_BYTES = 5 * 1024 * 1024;
+        if (raw.length > MAX_BYTES) {
+          raw = raw.slice(0, MAX_BYTES);
+          toast({ title: "File truncated", description: "Capped at 5 MB to prevent memory crashes." });
+        }
+        // Strip non-printable characters (preserve newlines + tabs).
+        raw = raw.replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]/g, "");
+        // Collapse excessive whitespace runs.
+        raw = raw.replace(/[ \t]{4,}/g, "   ");
+        raw = raw.replace(/\n{4,}/g, "\n\n\n");
+        raw = raw.trim();
+        if (raw.length < 20) {
+          toast({ title: "Empty file", description: "No usable text content found." });
+          return;
+        }
+        const datasetName = file.name.replace(/\.[^.]+$/, "");
+        commitProDatasetToEngine(datasetName, raw);
+        const note = datasets.length > 0 ? ` Interleaved with ${datasets.length} existing dataset(s).` : "";
+        toast({
+          title: "File ingested",
+          description: `"${datasetName}" — ${(raw.length / 1024).toFixed(1)} KB.${note}`,
+        });
+        setMatrixModalOpen(false);
+      } finally {
+        setProBusy(false);
+        setProStatus("");
+      }
+    };
+    reader.onerror = () => {
+      toast({ title: "Read failed", description: "Could not read the file." });
+      setProBusy(false);
+      setProStatus("");
+    };
+    reader.readAsText(file, "utf-8");
+  };
+
+  // Pro Hub Feature B: Domain Knowledge Presets.
+  // Fetches Wikipedia article extracts in batch and concatenates as raw
+  // continuous prose (NOT Q&A) so the model learns via next-token prediction
+  // on real, densely-informative text. Capped at 5 MB.
+  const DOMAIN_PRESETS: Record<string, { label: string; accent: string; articles: string[] }> = {
+    cs: {
+      label: "Computer Science",
+      accent: "#0A84FF",
+      articles: ["Computer science", "Algorithm", "Data structure", "Python (programming language)", "Artificial intelligence", "Operating system", "Computer network", "Database", "Software engineering", "Machine learning"],
+    },
+    physics: {
+      label: "Physics",
+      accent: "#30D158",
+      articles: ["Physics", "Quantum mechanics", "Classical mechanics", "Thermodynamics", "Electromagnetism", "Special relativity", "Nuclear physics", "Particle physics", "Astrophysics", "Wave–particle duality"],
+    },
+    history: {
+      label: "World History",
+      accent: "#FF9F0A",
+      articles: ["World history", "Ancient Egypt", "Roman Empire", "Middle Ages", "Renaissance", "Industrial Revolution", "World War I", "World War II", "Cold War", "Ancient Greece"],
+    },
+  };
+
+  const fetchDomainPreset = async (key: string) => {
+    if (proBusy) return;
+    const preset = DOMAIN_PRESETS[key];
+    if (!preset) return;
+    setProBusy(true);
+    setProStatus(`Fetching ${preset.label}…`);
+    const MAX_BYTES = 5 * 1024 * 1024;
+    const parts: string[] = [];
+    let totalBytes = 0;
+    for (const title of preset.articles) {
+      if (totalBytes >= MAX_BYTES) break;
+      try {
+        setProStatus(`Fetching "${title}"…`);
+        const res = await fetch(
+          `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`
+        );
+        if (!res.ok) continue;
+        const data = (await res.json()) as { extract?: string; title?: string };
+        const extract = data.extract ?? "";
+        if (!extract) continue;
+        // Raw continuous prose — NOT Q&A formatting.
+        parts.push(`${data.title ?? title}\n\n${extract}`);
+        totalBytes += extract.length;
+      } catch {
+        // Skip failed fetches silently.
+      }
+    }
+    if (parts.length === 0) {
+      toast({ title: "Fetch failed", description: "No articles retrieved. Check your connection." });
+      setProBusy(false);
+      setProStatus("");
+      return;
+    }
+    let combined = parts.join("\n\n\n");
+    if (combined.length > MAX_BYTES) combined = combined.slice(0, MAX_BYTES);
+    const datasetName = `Domain: ${preset.label}`;
+    commitProDatasetToEngine(datasetName, combined);
+    const note = datasets.length > 0 ? ` Interleaved with ${datasets.length} existing dataset(s).` : "";
+    toast({
+      title: "Domain ingested",
+      description: `${preset.label} — ${(combined.length / 1024).toFixed(1)} KB from ${parts.length} articles.${note}`,
+    });
+    setProBusy(false);
+    setProStatus("");
+    setMatrixModalOpen(false);
   };
 
   const commitToEngine = () => {
@@ -1729,6 +1883,8 @@ export default function App() {
       {/* ═══ Autonomous Data Matrix Modal ═══════════════════════════════════ */}
       {matrixModalOpen && (
         <div className="fixed inset-0 z-50 bg-[#000000]/97 backdrop-blur-md flex flex-col">
+
+          {/* Header */}
           <div className="h-14 shrink-0 border-b border-white/[0.06] px-5 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="size-8 rounded-lg bg-[#0A84FF]/10 border border-[#0A84FF]/18 flex items-center justify-center shrink-0">
@@ -1736,150 +1892,274 @@ export default function App() {
               </div>
               <div>
                 <div className="text-[13px] font-semibold text-white/88 tracking-tight">Autonomous Data Matrix</div>
-                <div className="text-[10px] text-white/28 font-mono">corpus synthesis & engine injection</div>
+                <div className="text-[10px] text-white/28 font-mono">corpus synthesis &amp; engine injection</div>
               </div>
             </div>
             <button
-              onClick={() => { if (!matrixStreaming) { setMatrixModalOpen(false); setMatrixStreamLines([]); setMatrixCommitReady(false); } }}
+              onClick={() => { if (!matrixStreaming && !proBusy) { setMatrixModalOpen(false); setMatrixStreamLines([]); setMatrixCommitReady(false); } }}
               className="size-8 rounded-lg flex items-center justify-center text-white/22 hover:text-white/65 hover:bg-white/[0.05] transition-all border border-transparent hover:border-white/[0.05]"
             >
               <X className="size-4" />
             </button>
           </div>
 
-          <div className="shrink-0 px-5 py-3 border-b border-white/[0.04] space-y-3">
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                {
-                  label: "Model Parameters",
-                  value: estimatedLLMParams >= 1_000_000
-                    ? `${(estimatedLLMParams / 1_000_000).toFixed(2)}M`
-                    : estimatedLLMParams > 1000
-                      ? `${Math.round(estimatedLLMParams / 1000)}K`
-                      : String(estimatedLLMParams),
-                },
-                {
-                  label: "Token Target",
-                  value: `~${Math.round(estimatedLLMParams * 20 / 1000)}K`,
-                },
-                {
-                  label: "Architecture Tier",
-                  value: estimatedLLMParams < 1_000_000 ? "Micro" : estimatedLLMParams < 10_000_000 ? "Standard" : "Large",
-                },
-              ].map((c, i) => (
-                <div key={i} className="rounded-xl bg-[#0a0a0a] border border-white/[0.05] px-3 py-2.5">
-                  <div className="text-[9px] text-white/20 uppercase tracking-[0.12em] mb-1">{c.label}</div>
-                  <div className="text-[15px] font-semibold text-white/80 font-mono">{c.value}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Knowledge Topic */}
-            <div className="rounded-xl bg-[#0a0a0a] border border-white/[0.05] px-3 py-2.5 space-y-2">
-              <div className="text-[9px] text-white/20 uppercase tracking-[0.12em] font-semibold">Knowledge Topic <span className="text-white/12 normal-case tracking-normal">(Wikipedia scraper seed)</span></div>
-              <input
-                value={knowledgeTopic}
-                onChange={(e) => setKnowledgeTopic(e.target.value)}
-                placeholder="e.g. quantum mechanics, Roman Empire, machine learning…"
-                maxLength={100}
-                disabled={matrixStreaming}
-                className="w-full h-9 rounded-lg border border-white/[0.06] bg-[#060606] px-3 text-[11px] text-white/70 placeholder:text-white/20 focus:outline-none focus:border-[#0A84FF]/35 transition-colors disabled:opacity-40"
-              />
-            </div>
-
-            {/* Knowledge Vector Sources */}
-            <div className="rounded-xl bg-[#0a0a0a] border border-white/[0.05] px-3 py-2.5 space-y-2">
-              <div className="text-[9px] text-white/20 uppercase tracking-[0.12em] font-semibold">Knowledge Vector Sources</div>
-              <div className="flex items-center gap-4 flex-wrap">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={matrixWikiEnabled} onChange={(e) => setMatrixWikiEnabled(e.target.checked)}
-                    className="sr-only" />
-                  <div className={`w-8 h-4 rounded-full border transition-all relative ${matrixWikiEnabled ? "bg-[#0A84FF] border-[#0A84FF]/50" : "bg-white/[0.05] border-white/[0.10]"}`}>
-                    <span className="absolute top-[3px] size-[10px] rounded-full bg-white shadow-sm transition-transform"
-                      style={{ left: matrixWikiEnabled ? "calc(100% - 13px)" : "3px" }} />
-                  </div>
-                  <span className="text-[10px] text-white/55 font-medium">Wikipedia (Core Science / History)</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={matrixDictEnabled} onChange={(e) => setMatrixDictEnabled(e.target.checked)}
-                    className="sr-only" />
-                  <div className={`w-8 h-4 rounded-full border transition-all relative ${matrixDictEnabled ? "bg-[#0A84FF] border-[#0A84FF]/50" : "bg-white/[0.05] border-white/[0.10]"}`}>
-                    <span className="absolute top-[3px] size-[10px] rounded-full bg-white shadow-sm transition-transform"
-                      style={{ left: matrixDictEnabled ? "calc(100% - 13px)" : "3px" }} />
-                  </div>
-                  <span className="text-[10px] text-white/55 font-medium">Language Dictionary (Grammar / Syntax)</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={matrixAutoLoop} onChange={(e) => setMatrixAutoLoop(e.target.checked)}
-                    className="sr-only" />
-                  <div className={`w-8 h-4 rounded-full border transition-all relative ${matrixAutoLoop ? "bg-[#30D158] border-[#30D158]/50" : "bg-white/[0.05] border-white/[0.10]"}`}>
-                    <span className="absolute top-[3px] size-[10px] rounded-full bg-white shadow-sm transition-transform"
-                      style={{ left: matrixAutoLoop ? "calc(100% - 13px)" : "3px" }} />
-                  </div>
-                  <span className="text-[10px] text-white/55 font-medium">Auto-Loop (20 tok/param ratio target)</span>
-                </label>
-              </div>
-            </div>
+          {/* Tab bar */}
+          <div className="shrink-0 border-b border-white/[0.06] px-5 flex gap-1 pt-1">
+            <button
+              onClick={() => setMatrixTab("standard")}
+              className={`h-9 px-4 text-[11px] font-semibold border-b-2 transition-all ${
+                matrixTab === "standard"
+                  ? "border-[#0A84FF] text-[#0A84FF]"
+                  : "border-transparent text-white/30 hover:text-white/55"
+              }`}
+            >
+              Standard Ingestion
+            </button>
+            <button
+              onClick={() => setMatrixTab("pro")}
+              className={`h-9 px-4 text-[11px] font-semibold border-b-2 transition-all flex items-center gap-1.5 ${
+                matrixTab === "pro"
+                  ? "border-[#FF9F0A] text-[#FF9F0A]"
+                  : "border-transparent text-white/30 hover:text-white/55"
+              }`}
+            >
+              Pro Ingestion Hub
+              <span className="text-[9px] bg-[#FF9F0A]/15 text-[#FF9F0A]/75 px-1.5 py-0.5 rounded-md font-medium">PRO</span>
+            </button>
           </div>
 
-          <div ref={terminalRef} className="flex-1 overflow-y-auto px-5 py-4 font-mono text-[11px] leading-[1.8]">
-            {matrixStreamLines.length === 0 && !matrixStreaming && (
-              <div className="text-white/18 text-center pt-16">
-                Press <span className="text-[#0A84FF]/60">Execute Synthesis</span> to begin automated data generation
+          {/* ── Standard tab ─────────────────────────────────────────────── */}
+          {matrixTab === "standard" && (
+            <>
+              <div className="shrink-0 px-5 py-3 border-b border-white/[0.04] space-y-3">
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    {
+                      label: "Model Parameters",
+                      value: estimatedLLMParams >= 1_000_000
+                        ? `${(estimatedLLMParams / 1_000_000).toFixed(2)}M`
+                        : estimatedLLMParams > 1000
+                          ? `${Math.round(estimatedLLMParams / 1000)}K`
+                          : String(estimatedLLMParams),
+                    },
+                    { label: "Token Target", value: `~${Math.round(estimatedLLMParams * 20 / 1000)}K` },
+                    { label: "Architecture Tier", value: estimatedLLMParams < 1_000_000 ? "Micro" : estimatedLLMParams < 10_000_000 ? "Standard" : "Large" },
+                  ].map((c, i) => (
+                    <div key={i} className="rounded-xl bg-[#0a0a0a] border border-white/[0.05] px-3 py-2.5">
+                      <div className="text-[9px] text-white/20 uppercase tracking-[0.12em] mb-1">{c.label}</div>
+                      <div className="text-[15px] font-semibold text-white/80 font-mono">{c.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="rounded-xl bg-[#0a0a0a] border border-white/[0.05] px-3 py-2.5 space-y-2">
+                  <div className="text-[9px] text-white/20 uppercase tracking-[0.12em] font-semibold">
+                    Knowledge Topic <span className="text-white/12 normal-case tracking-normal">(Wikipedia scraper seed)</span>
+                  </div>
+                  <input
+                    value={knowledgeTopic}
+                    onChange={(e) => setKnowledgeTopic(e.target.value)}
+                    placeholder="e.g. quantum mechanics, Roman Empire, machine learning…"
+                    maxLength={100}
+                    disabled={matrixStreaming}
+                    className="w-full h-9 rounded-lg border border-white/[0.06] bg-[#060606] px-3 text-[11px] text-white/70 placeholder:text-white/20 focus:outline-none focus:border-[#0A84FF]/35 transition-colors disabled:opacity-40"
+                  />
+                </div>
+
+                <div className="rounded-xl bg-[#0a0a0a] border border-white/[0.05] px-3 py-2.5 space-y-2">
+                  <div className="text-[9px] text-white/20 uppercase tracking-[0.12em] font-semibold">Knowledge Vector Sources</div>
+                  <div className="flex items-center gap-4 flex-wrap">
+                    {[
+                      { label: "Wikipedia (Core Science / History)", checked: matrixWikiEnabled, set: setMatrixWikiEnabled, color: "#0A84FF" },
+                      { label: "Language Dictionary (Grammar / Syntax)", checked: matrixDictEnabled, set: setMatrixDictEnabled, color: "#0A84FF" },
+                      { label: "Auto-Loop (20 tok/param ratio target)", checked: matrixAutoLoop, set: setMatrixAutoLoop, color: "#30D158" },
+                    ].map(({ label, checked, set, color }) => (
+                      <label key={label} className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={checked} onChange={(e) => set(e.target.checked)} className="sr-only" />
+                        <div className="w-8 h-4 rounded-full border transition-all relative" style={{ background: checked ? color : "rgba(255,255,255,0.05)", borderColor: checked ? `${color}80` : "rgba(255,255,255,0.10)" }}>
+                          <span className="absolute top-[3px] size-[10px] rounded-full bg-white shadow-sm transition-transform" style={{ left: checked ? "calc(100% - 13px)" : "3px" }} />
+                        </div>
+                        <span className="text-[10px] text-white/55 font-medium">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
-            )}
-            {matrixStreamLines.map((line, i) => {
-              const isPhase = line.startsWith("━━━");
-              const isCheck = line.startsWith("  ✓");
-              const isArrow = line.startsWith("  >>");
-              const isComplete = line.startsWith("■");
-              const isBar = line.startsWith("████");
-              const isTop = line.startsWith(">>");
-              return (
+
+              <div ref={terminalRef} className="flex-1 overflow-y-auto px-5 py-4 font-mono text-[11px] leading-[1.8]">
+                {matrixStreamLines.length === 0 && !matrixStreaming && (
+                  <div className="text-white/18 text-center pt-16">
+                    Press <span className="text-[#0A84FF]/60">Execute Synthesis</span> to begin automated data generation
+                  </div>
+                )}
+                {matrixStreamLines.map((line, i) => {
+                  const isPhase = line.startsWith("━━━");
+                  const isCheck = line.startsWith("  ✓");
+                  const isArrow = line.startsWith("  >>");
+                  const isComplete = line.startsWith("■");
+                  const isBar = line.startsWith("████");
+                  const isTop = line.startsWith(">>");
+                  return (
+                    <div key={i} className={
+                      isPhase ? "text-[#0A84FF]/70 font-semibold mt-2 mb-0.5" :
+                      isCheck ? "text-[#30D158]/75 font-medium" :
+                      isArrow ? "text-white/35 pl-1" :
+                      isTop ? "text-white/45" :
+                      isComplete ? "text-[#30D158] font-bold mt-2" :
+                      isBar ? "text-[#0A84FF]/45 tracking-wider" :
+                      "text-white/18"
+                    }>
+                      {line || "\u00A0"}
+                    </div>
+                  );
+                })}
+                {matrixStreaming && (
+                  <div className="flex items-center gap-2 mt-1 pl-1">
+                    <span className="size-1.5 rounded-full bg-[#0A84FF] animate-ping shrink-0" />
+                    <span className="text-[#0A84FF]/45 text-[11px]">processing ...</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="shrink-0 border-t border-white/[0.05] px-5 py-4 flex items-center gap-3">
+                {!matrixCommitReady ? (
+                  <button
+                    onClick={executeAutonomousSynthesis}
+                    disabled={matrixStreaming}
+                    className="flex-1 h-12 rounded-xl bg-[#0A84FF] text-white text-[12px] font-semibold flex items-center justify-center gap-2.5 hover:bg-[#409CFF] transition-all disabled:opacity-35 disabled:cursor-not-allowed"
+                  >
+                    <Terminal className="size-4" />
+                    Execute Autonomous Data Synthesis &amp; Scrape
+                  </button>
+                ) : (
+                  <button
+                    onClick={commitToEngine}
+                    className="flex-1 h-12 rounded-xl bg-[#30D158]/12 border border-[#30D158]/28 text-[#30D158]/90 text-[12px] font-semibold flex items-center justify-center gap-2.5 hover:bg-[#30D158]/20 hover:border-[#30D158]/40 transition-all"
+                  >
+                    <Cpu className="size-4" />
+                    Commit Dataset to Core Engine
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* ── Pro Ingestion Hub tab ─────────────────────────────────────── */}
+          {matrixTab === "pro" && (
+            <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+
+              {/* Feature A: Local File Uploader */}
+              <div className="space-y-2.5">
+                <div className="text-[9px] text-white/25 uppercase tracking-[0.14em] font-semibold flex items-center gap-1.5">
+                  <Upload className="size-3 shrink-0" />
+                  Local File Uploader
+                </div>
                 <div
-                  key={i}
-                  className={
-                    isPhase ? "text-[#0A84FF]/70 font-semibold mt-2 mb-0.5" :
-                    isCheck ? "text-[#30D158]/75 font-medium" :
-                    isArrow ? "text-white/35 pl-1" :
-                    isTop ? "text-white/45" :
-                    isComplete ? "text-[#30D158] font-bold mt-2" :
-                    isBar ? "text-[#0A84FF]/45 tracking-wider" :
-                    "text-white/18"
-                  }
+                  onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+                  onDragEnter={(e) => { e.preventDefault(); setIsDragOver(true); }}
+                  onDragLeave={() => setIsDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragOver(false);
+                    const file = e.dataTransfer.files[0];
+                    if (file) handleFileUpload(file);
+                  }}
+                  onClick={() => {
+                    if (proBusy) return;
+                    const inp = document.createElement("input");
+                    inp.type = "file";
+                    inp.accept = ".txt,.md";
+                    inp.onchange = (ev) => {
+                      const file = (ev.target as HTMLInputElement).files?.[0];
+                      if (file) handleFileUpload(file);
+                    };
+                    inp.click();
+                  }}
+                  className={`relative h-36 rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-2.5 cursor-pointer transition-all select-none ${
+                    isDragOver
+                      ? "border-[#0A84FF]/60 bg-[#0A84FF]/[0.06] scale-[1.01]"
+                      : proBusy
+                        ? "border-white/[0.06] bg-[#0a0a0a] cursor-not-allowed opacity-60"
+                        : "border-white/[0.10] bg-[#080808] hover:border-[#0A84FF]/35 hover:bg-[#0A84FF]/[0.03]"
+                  }`}
                 >
-                  {line || "\u00A0"}
+                  {proBusy ? (
+                    <>
+                      <div className="size-5 rounded-full border-2 border-[#0A84FF]/30 border-t-[#0A84FF] animate-spin" />
+                      <span className="text-[11px] text-white/38 font-medium">{proStatus}</span>
+                    </>
+                  ) : isDragOver ? (
+                    <>
+                      <Upload className="size-6 text-[#0A84FF]/70" />
+                      <span className="text-[12px] font-semibold text-[#0A84FF]/80">Drop to ingest</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="size-6 text-white/20" />
+                      <div className="text-center">
+                        <div className="text-[12px] font-medium text-white/38">Drag &amp; drop your file here</div>
+                        <div className="text-[10px] text-white/20 mt-0.5">or click to browse · .txt &amp; .md · max 5 MB</div>
+                      </div>
+                    </>
+                  )}
                 </div>
-              );
-            })}
-            {matrixStreaming && (
-              <div className="flex items-center gap-2 mt-1 pl-1">
-                <span className="size-1.5 rounded-full bg-[#0A84FF] animate-ping shrink-0" />
-                <span className="text-[#0A84FF]/45 text-[11px]">processing ...</span>
               </div>
-            )}
-          </div>
 
-          <div className="shrink-0 border-t border-white/[0.05] px-5 py-4 flex items-center gap-3">
-            {!matrixCommitReady ? (
-              <button
-                onClick={executeAutonomousSynthesis}
-                disabled={matrixStreaming}
-                className="flex-1 h-12 rounded-xl bg-[#0A84FF] text-white text-[12px] font-semibold flex items-center justify-center gap-2.5 hover:bg-[#409CFF] transition-all disabled:opacity-35 disabled:cursor-not-allowed"
-              >
-                <Terminal className="size-4" />
-                Execute Autonomous Data Synthesis &amp; Scrape
-              </button>
-            ) : (
-              <button
-                onClick={commitToEngine}
-                className="flex-1 h-12 rounded-xl bg-[#30D158]/12 border border-[#30D158]/28 text-[#30D158]/90 text-[12px] font-semibold flex items-center justify-center gap-2.5 hover:bg-[#30D158]/20 hover:border-[#30D158]/40 transition-all"
-              >
-                <Cpu className="size-4" />
-                Commit Dataset to Core Engine
-              </button>
-            )}
-          </div>
+              {/* Feature B: Domain Knowledge Presets */}
+              <div className="space-y-2.5">
+                <div className="text-[9px] text-white/25 uppercase tracking-[0.14em] font-semibold flex items-center gap-1.5">
+                  <Database className="size-3 shrink-0" />
+                  Domain Knowledge Presets
+                  <span className="text-white/15 normal-case tracking-normal ml-1">raw prose · next-token format</span>
+                </div>
+                <div className="space-y-2">
+                  {(["cs", "physics", "history"] as const).map((key) => {
+                    const p = DOMAIN_PRESETS[key];
+                    const isActive = proBusy && proStatus.includes(p.label);
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => fetchDomainPreset(key)}
+                        disabled={proBusy}
+                        className="w-full h-[60px] rounded-xl border border-white/[0.06] bg-[#0a0a0a] hover:bg-[#0f0f0f] hover:border-white/[0.12] flex items-center gap-3.5 px-4 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
+                      >
+                        <div
+                          className="size-9 rounded-lg flex items-center justify-center shrink-0 transition-all"
+                          style={{ background: `${p.accent}15`, border: `1px solid ${p.accent}25` }}
+                        >
+                          {isActive
+                            ? <div className="size-3.5 rounded-full border-2 border-white/20 border-t-white animate-spin" />
+                            : <Database className="size-3.5" style={{ color: `${p.accent}90` }} />
+                          }
+                        </div>
+                        <div className="flex-1 text-left">
+                          <div className="text-[12px] font-semibold text-white/75 group-hover:text-white/90 transition-colors">{p.label}</div>
+                          <div className="text-[9px] text-white/28 mt-0.5">
+                            {isActive ? proStatus : `${p.articles.length} foundational Wikipedia articles · raw continuous prose`}
+                          </div>
+                        </div>
+                        {!proBusy && (
+                          <ArrowRight className="size-3.5 text-white/18 group-hover:text-white/45 transition-colors shrink-0" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Interleave status badge */}
+              {datasets.length > 0 && (
+                <div className="rounded-xl bg-[#30D158]/[0.04] border border-[#30D158]/12 px-3.5 py-2.5 flex items-start gap-2.5">
+                  <div className="size-1.5 rounded-full bg-[#30D158] shrink-0 mt-[5px]" />
+                  <div className="text-[10px] text-[#30D158]/70 leading-relaxed">
+                    <span className="font-semibold">{datasets.length} existing dataset{datasets.length !== 1 ? "s" : ""} detected.</span>{" "}
+                    New data will be interleaved for round-robin training — Catastrophic Forgetting prevention active.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
         </div>
       )}
 

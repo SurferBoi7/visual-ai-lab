@@ -1,0 +1,27 @@
+Act as a Principal ML Data Engineer and UI Architect. We are upgrading the Data Ingestion pipeline to support foundational domain training (continuous, massive text) while preventing browser Out-Of-Memory (OOM) crashes and API rate limits. 
+
+Please implement the following structural overhaul to the Data Ingestion Matrix:
+
+### 1. The Tabbed Ingestion UI
+* Refactor the Data Ingestion modal/section to feature two distinct tabs: `[Standard Ingestion]` and `[Pro Ingestion Hub]`.
+* **Standard Ingestion:** Move the existing Wikipedia scraper, Knowledge Topic input, and UI exactly as they are into this tab. Do not break the current Q&A/summary functionality.
+* **Pro Ingestion Hub:** This new tab will house our heavy-duty data pipelines designed for continuous text formatting.
+
+### 2. Pro Hub Feature A: The Local File Uploader
+* Build a sleek, dark-themed Drag-and-Drop / File Upload zone accepting `.txt` and `.md` files.
+* Use the browser's native `FileReader` API to read the file asynchronously (to prevent UI freezing).
+* **Sanitization:** Strip out excessive consecutive whitespaces and non-printable characters. 
+* **Safe Capping:** Truncate the text if it exceeds 5MB to prevent Chrome memory crashes.
+* Save this raw text block as a new entry in the `datasets` array and IndexedDB, using the uploaded filename as the dataset title.
+
+### 3. Pro Hub Feature B: Multi-Article Domain Fetcher
+* Below the uploader, create a "Domain Knowledge Presets" section with 3 buttons: `[Computer Science]`, `[Physics]`, and `[World History]`.
+* Map each button to a hardcoded array of 5 to 10 foundational Wikipedia article titles (e.g., for Computer Science: "Computer science", "Algorithm", "Data structure", "Python (programming language)", "Artificial intelligence").
+* When clicked, asynchronously loop through the array and fetch the plain text extracts from the Wikipedia REST API.
+* **CRITICAL FORMATTING:** Do NOT format this as Q&A. Concatenate all fetched articles into one massive, continuous block of raw text. The AI must learn the foundational structure via next-token prediction, not dialogue.
+* Cap the combined fetch at 5MB, and commit it to the `datasets` array (e.g., named "Domain: Computer Science").
+
+### 4. Integration with the Interleaved Trainer
+* Ensure that datasets committed from the Pro Ingestion Hub correctly append to the `datasets` state so they can be seamlessly processed by our existing interleaved (round-robin) training worker loop. 
+
+Ensure the UI matches our dark-mode hacker aesthetic, uses loading spinners during file reading and fetching, and compiles with absolutely zero TypeScript errors.
