@@ -3,15 +3,12 @@
 import {
   TextNetwork,
   buildVocab,
-  makeWindows,
   generateTokens,
   joinTokens,
   tokenize,
   sampleFromProbs,
   PAD_TOKEN,
   EOS_TOKEN,
-  // Re-exported only because makeSample still uses generateTokens for the
-  // training-tick "live dream" preview where stop-sequencing isn't desired.
   type Tokenization,
 } from "./textnet";
 
@@ -56,8 +53,6 @@ function findStopCut(text: string): number {
 interface InitOpts {
   corpus: string;
   // Optional per-dataset corpora for interleaved continual learning.
-  // When provided (and length > 1), trainEpoch round-robins across datasets
-  // so no single dataset dominates gradient updates (anti-catastrophic-forgetting).
   corpusDatasets?: string[];
   contextSize: number;
   hiddenSize: number;
@@ -108,49 +103,91 @@ let gpuActive = false;
   postMessage({ type: "gpuStatus", active: gpuActive });
 })();
 
-// ── Per-dataset window set for interleaved training ─────────────────────────
-// Each entry holds the windows extracted from one source dataset, plus its
-// own shuffle-cursor so interleaving is truly round-robin rather than
-// accidentally serializing datasets.
-interface DatasetWindowSet {
-  inputs: number[][];
-  targets: number[];
-  order: number[];
+// ── Lazy-batch helpers ───────────────────────────────────────────────────────
+//
+// MEMORY MODEL: we never pre-compute the full sliding-window matrix.
+// Instead every dataset is stored as a single flat Uint16Array of token IDs.
+// Windows are sliced on-the-fly inside trainEpoch:
+//
+//   input  = ids.subarray(start, start + contextSize)  → Array.from(...)
+//   target = ids[start + contextSize]
+//
+// This drops allocation from O(N × contextSize) down to O(N), so a 1.5 MB
+// corpus at contextSize=512 goes from ~600 MB pre-allocated to ~3 MB.
+
+function tokensToIds(
+  tokens: string[],
+  stoi: Record<string, number>,
+  padId: number,
+): Uint16Array {
+  const ids = new Uint16Array(tokens.length);
+  for (let i = 0; i < tokens.length; i++) {
+    const id = stoi[tokens[i]];
+    ids[i] = id !== undefined ? id : padId;
+  }
+  return ids;
+}
+
+// Fisher-Yates shuffle over a Uint32Array of window-start indices.
+function fisherYates(arr: Uint32Array, len: number): void {
+  for (let i = len - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+}
+
+function makeShuffledOrder(numWindows: number): Uint32Array {
+  const order = new Uint32Array(numWindows);
+  for (let i = 0; i < numWindows; i++) order[i] = i;
+  fisherYates(order, numWindows);
+  return order;
+}
+
+// ── Per-dataset lazy state ────────────────────────────────────────────────────
+// ids         — flat token-ID array for the dataset corpus
+// numWindows  — ids.length - contextSize (number of valid stride-1 windows)
+// order       — shuffled Uint32Array of window-start indices [0, numWindows)
+// cursor      — next position in order to consume
+interface DatasetLazy {
+  ids: Uint16Array;
+  numWindows: number;
+  order: Uint32Array;
   cursor: number;
 }
 
-let datasetWindowSets: DatasetWindowSet[] = [];
+let datasetWindowSets: DatasetLazy[] = [];
 
-function shuffleSet(ds: DatasetWindowSet) {
-  ds.order = ds.inputs.map((_, i) => i);
-  for (let i = ds.order.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [ds.order[i], ds.order[j]] = [ds.order[j], ds.order[i]];
-  }
+function reshuffleDataset(ds: DatasetLazy): void {
+  fisherYates(ds.order, ds.numWindows);
   ds.cursor = 0;
 }
 
-function buildDatasetWindowSet(
+function buildDatasetLazy(
   rawCorpus: string,
   contextSize: number,
-): DatasetWindowSet | null {
+): DatasetLazy | null {
   const normalized = normalizeText(rawCorpus);
   const tokens = tokenize(normalized.length > 0 ? normalized : " ", tokenization);
-  if (tokens.length === 0) return null;
-  // Build windows using the shared global vocab (stoi) so all datasets map to
-  // the same token ids — the vocab must have been built from the combined
-  // corpus before calling this function.
-  const w = makeWindows(tokens, stoi, contextSize);
-  if (w.inputs.length === 0) return null;
-  const ds: DatasetWindowSet = { inputs: w.inputs, targets: w.targets, order: [], cursor: 0 };
-  shuffleSet(ds);
-  return ds;
+  if (tokens.length <= contextSize) return null;
+  const padId = stoi[PAD_TOKEN] ?? 0;
+  const ids = tokensToIds(tokens, stoi, padId);
+  const numWindows = ids.length - contextSize;
+  if (numWindows <= 0) return null;
+  return { ids, numWindows, order: makeShuffledOrder(numWindows), cursor: 0 };
 }
 
-// ── Global training state ───────────────────────────────────────────────────
+// ── Global training state ────────────────────────────────────────────────────
 let net: TextNetwork | null = null;
-let inputs: number[][] = [];
-let targets: number[] = [];
+
+// Lazy corpus — single flat Uint16Array, no pre-computed window matrix.
+let corpusIds: Uint16Array = new Uint16Array(0);
+let numWindows = 0;
+let order: Uint32Array = new Uint32Array(0);
+let cursor = 0;
+
+// corpusTokens is kept only for pickSeedTokens (generation seeding).
 let vocab: string[] = [];
 let stoi: Record<string, number> = {};
 let corpus = "";
@@ -164,22 +201,12 @@ let lossEMA = 0;
 let trainedSamples = 0;
 let trainStartedAt = 0;
 
-let order: number[] = [];
-let cursor = 0;
-
-// ── Async training loop control ─────────────────────────────────────────────
-// Using an explicit `playing` flag + generation counter instead of setInterval
-// so the async trainEpoch can be safely interrupted mid-epoch when the user
-// hits pause or the worker is reset.
+// ── Async training loop control ──────────────────────────────────────────────
 let playing = false;
-let generation = 0; // incremented on every init/reset — guards mid-epoch yields
+let generation = 0;
 
-function shuffleOrder() {
-  order = inputs.map((_, i) => i);
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [order[i], order[j]] = [order[j], order[i]];
-  }
+function shuffleOrder(): void {
+  fisherYates(order, numWindows);
   cursor = 0;
 }
 
@@ -188,12 +215,13 @@ function init(opts: InitOpts) {
   temperature = opts.temperature;
   if (typeof opts.topK === "number") topK = opts.topK;
 
-  const rawDatasets: string[] = (opts.corpusDatasets && opts.corpusDatasets.length > 0)
-    ? opts.corpusDatasets
-    : [opts.corpus];
+  const rawDatasets: string[] =
+    opts.corpusDatasets && opts.corpusDatasets.length > 0
+      ? opts.corpusDatasets
+      : [opts.corpus];
 
-  // Build vocab from the FULL combined corpus so all per-dataset windows
-  // share the same token-id space.
+  // Build vocab from the FULL combined corpus so all datasets share the same
+  // token-id space.
   const combinedRaw = rawDatasets.join(" ");
   const normalized = normalizeText(combinedRaw);
   corpus = normalized.length > 0 ? normalized : " ";
@@ -204,16 +232,19 @@ function init(opts: InitOpts) {
   vocab = v.chars;
   stoi = v.stoi;
 
-  // Full combined windows (used for single-dataset fallback and snapshots).
-  const w = makeWindows(corpusTokens, stoi, opts.contextSize);
-  inputs = w.inputs;
-  targets = w.targets;
+  const padId = stoi[PAD_TOKEN] ?? stoi[" "] ?? 0;
 
-  // Build per-dataset window sets when multiple corpora are given.
+  // ── Lazy corpus IDs — O(N), not O(N × ctx) ────────────────────────────────
+  corpusIds = tokensToIds(corpusTokens, stoi, padId);
+  numWindows = Math.max(0, corpusIds.length - opts.contextSize);
+  order = makeShuffledOrder(numWindows);
+  cursor = 0;
+
+  // Build per-dataset lazy sets when multiple corpora are given.
   if (rawDatasets.length > 1) {
     datasetWindowSets = rawDatasets
-      .map((raw) => buildDatasetWindowSet(raw, opts.contextSize))
-      .filter((ds): ds is DatasetWindowSet => ds !== null);
+      .map((raw) => buildDatasetLazy(raw, opts.contextSize))
+      .filter((ds): ds is DatasetLazy => ds !== null);
   } else {
     datasetWindowSets = [];
   }
@@ -229,43 +260,47 @@ function init(opts: InitOpts) {
   lossEMA = Math.log(Math.max(2, vocab.length));
   trainedSamples = 0;
   trainStartedAt = 0;
-  generation++; // invalidate any in-flight async epoch from the previous init
-  shuffleOrder();
+  generation++;
   emitSnapshot();
 }
 
 // ── Async chunked training epoch ─────────────────────────────────────────────
-// Processes CHUNK_SIZE gradient steps then yields to the event loop via a
-// zero-delay setTimeout.  This prevents the browser tab from freezing even
-// with a 50M-parameter model on a 1.5 MB corpus.
-//
-// The `myGen` guard ensures that a reset/init happening mid-epoch (e.g. the
-// user switches corpus while training) causes the old epoch to abort cleanly
-// rather than overwriting the new model's weights.
+// Windows are generated on-the-fly from the flat corpusIds / dataset ids arrays.
+// Each iteration allocates only a tiny contextSize-length Array — the GC reclaims
+// it immediately after backprop, so heap stays flat regardless of corpus size.
 async function trainEpoch(): Promise<void> {
   if (!net) return;
   if (trainStartedAt === 0) trainStartedAt = performance.now();
 
   const myGen = generation;
+  const contextSize = net.config.contextSize;
 
-  const yieldToEventLoop = () =>
+  const yieldToEventLoop = (): Promise<void> =>
     new Promise<void>((resolve) => setTimeout(resolve, 0));
 
   if (datasetWindowSets.length > 1) {
     // ── Interleaved multi-dataset path ────────────────────────────────────
-    // We compute steps as the average dataset size so every epoch is roughly
-    // the same cost regardless of dataset count.
-    const totalInputs = datasetWindowSets.reduce((acc, ds) => acc + ds.inputs.length, 0);
-    const avgSize = Math.max(1, Math.ceil(totalInputs / datasetWindowSets.length));
+    const totalInputs = datasetWindowSets.reduce(
+      (acc, ds) => acc + ds.numWindows,
+      0,
+    );
+    const avgSize = Math.max(
+      1,
+      Math.ceil(totalInputs / datasetWindowSets.length),
+    );
     let total = 0;
     let count = 0;
     let chunkCount = 0;
 
     for (let step = 0; step < avgSize; step++) {
       for (const ds of datasetWindowSets) {
-        if (ds.cursor >= ds.order.length) shuffleSet(ds);
-        const idx = ds.order[ds.cursor++];
-        total += net.trainStep(ds.inputs[idx], ds.targets[idx]);
+        if (ds.cursor >= ds.numWindows) reshuffleDataset(ds);
+        const start = ds.order[ds.cursor++];
+        // On-the-fly window slice — allocated here, GC'd after trainStep.
+        const ctx = new Array<number>(contextSize);
+        for (let k = 0; k < contextSize; k++) ctx[k] = ds.ids[start + k];
+        const tgt = ds.ids[start + contextSize];
+        total += net.trainStep(ctx, tgt);
         trainedSamples++;
         count++;
         chunkCount++;
@@ -273,7 +308,6 @@ async function trainEpoch(): Promise<void> {
         if (chunkCount >= CHUNK_SIZE) {
           chunkCount = 0;
           await yieldToEventLoop();
-          // If a reset happened while we were yielded, bail out immediately.
           if (generation !== myGen || !net) return;
         }
       }
@@ -282,17 +316,20 @@ async function trainEpoch(): Promise<void> {
     const avg = count > 0 ? total / count : 0;
     lossEMA = epoch === 0 ? avg : lossEMA * 0.7 + avg * 0.3;
     epoch++;
-
   } else {
     // ── Single-dataset path ───────────────────────────────────────────────
-    if (inputs.length === 0) return;
+    if (numWindows === 0) return;
     let total = 0;
     let chunkCount = 0;
 
-    for (let i = 0; i < inputs.length; i++) {
-      if (cursor >= order.length) shuffleOrder();
-      const idx = order[cursor++];
-      total += net.trainStep(inputs[idx], targets[idx]);
+    for (let i = 0; i < numWindows; i++) {
+      if (cursor >= numWindows) shuffleOrder();
+      const start = order[cursor++];
+      // On-the-fly window slice.
+      const ctx = new Array<number>(contextSize);
+      for (let k = 0; k < contextSize; k++) ctx[k] = corpusIds[start + k];
+      const tgt = corpusIds[start + contextSize];
+      total += net.trainStep(ctx, tgt);
       trainedSamples++;
       chunkCount++;
 
@@ -303,7 +340,7 @@ async function trainEpoch(): Promise<void> {
       }
     }
 
-    const avg = total / inputs.length;
+    const avg = total / numWindows;
     lossEMA = epoch === 0 ? avg : lossEMA * 0.7 + avg * 0.3;
     epoch++;
   }
@@ -349,9 +386,6 @@ function emitSnapshot() {
 }
 
 // ── Async training loop ───────────────────────────────────────────────────────
-// Replaces setInterval with a while-loop that correctly awaits each async
-// trainEpoch before scheduling the next one.  This eliminates the race
-// condition where setInterval fires again before a long epoch finishes.
 function play(epochsPerSecond: number) {
   pause();
   playing = true;
@@ -363,8 +397,6 @@ function play(epochsPerSecond: number) {
       await trainEpoch();
       if (!playing) break;
       emitSnapshot();
-      // Throttle: wait out whatever remains of the target interval so we don't
-      // spin faster than epochsPerSecond when individual epochs are very short.
       const elapsed = performance.now() - t0;
       const remaining = targetMs - elapsed;
       if (remaining > 1) {
@@ -418,12 +450,16 @@ self.onmessage = (e: MessageEvent) => {
       const streamCtxSize = net.config.contextSize;
       const streamPadId = stoi[PAD_TOKEN] ?? stoi[" "] ?? 0;
       const streamEosId = stoi[EOS_TOKEN];
-      const streamSeedIds = streamSeedTokens.map((t) => stoi[t] !== undefined ? stoi[t] : streamPadId);
+      const streamSeedIds = streamSeedTokens.map((t) =>
+        stoi[t] !== undefined ? stoi[t] : streamPadId,
+      );
       let streamCtx: number[];
       if (streamSeedIds.length >= streamCtxSize) {
         streamCtx = streamSeedIds.slice(-streamCtxSize);
       } else {
-        streamCtx = new Array(streamCtxSize - streamSeedIds.length).fill(streamPadId).concat(streamSeedIds);
+        streamCtx = new Array(streamCtxSize - streamSeedIds.length)
+          .fill(streamPadId)
+          .concat(streamSeedIds);
       }
       const streamGenerated: string[] = [];
       let streamText = "";
@@ -460,7 +496,9 @@ self.onmessage = (e: MessageEvent) => {
       const ctxSize = net.config.contextSize;
       const padId = stoi[PAD_TOKEN] ?? stoi[" "] ?? 0;
       const eosId = stoi[EOS_TOKEN];
-      const seedIds = seedTokens.map((t) => stoi[t] !== undefined ? stoi[t] : padId);
+      const seedIds = seedTokens.map((t) =>
+        stoi[t] !== undefined ? stoi[t] : padId,
+      );
       let ctx: number[];
       if (seedIds.length >= ctxSize) {
         ctx = seedIds.slice(-ctxSize);
@@ -508,13 +546,15 @@ self.onmessage = (e: MessageEvent) => {
       vocab = w.vocab as string[];
       stoi = {};
       for (let i = 0; i < vocab.length; i++) stoi[vocab[i]] = i;
-      const wins = makeWindows(corpusTokens, stoi, w.config.contextSize);
-      inputs = wins.inputs;
-      targets = wins.targets;
-      // Loaded models always use the single-dataset path for training.
-      // When the user adds more datasets, the worker will be reset with
-      // per-dataset corpora via the "reset" message.
+
+      // ── Lazy IDs — no makeWindows, no pre-allocated window matrix ─────────
+      const padId = stoi[PAD_TOKEN] ?? stoi[" "] ?? 0;
+      corpusIds = tokensToIds(corpusTokens, stoi, padId);
+      numWindows = Math.max(0, corpusIds.length - w.config.contextSize);
+      order = makeShuffledOrder(numWindows);
+      cursor = 0;
       datasetWindowSets = [];
+
       net = new TextNetwork({
         vocabSize: w.config.vocabSize,
         contextSize: w.config.contextSize,
@@ -534,8 +574,7 @@ self.onmessage = (e: MessageEvent) => {
       lossEMA = typeof w.loss === "number" ? w.loss : 0;
       trainedSamples = 0;
       trainStartedAt = 0;
-      generation++; // invalidate any stale in-flight epoch
-      shuffleOrder();
+      generation++;
       emitSnapshot();
       break;
     }
