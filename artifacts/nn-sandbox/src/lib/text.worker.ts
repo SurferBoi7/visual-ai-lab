@@ -265,9 +265,13 @@ function init(opts: InitOpts) {
 }
 
 // ── Async chunked training epoch ─────────────────────────────────────────────
-// Windows are generated on-the-fly from the flat corpusIds / dataset ids arrays.
-// Each iteration allocates only a tiny contextSize-length Array — the GC reclaims
-// it immediately after backprop, so heap stays flat regardless of corpus size.
+// STRIDE: the epoch visits only N/contextSize non-overlapping window starts
+// instead of all N stride-1 positions.  This keeps epoch time proportional to
+// corpus size rather than corpus × context, so a 1.5 MB corpus at ctx=256
+// runs ~256× faster per epoch (5k steps instead of 1.5M).
+//
+// LIVE TELEMETRY: after every CHUNK_SIZE steps we yield AND push a lightweight
+// "progress" message so the UI dashboard stays alive during long epochs.
 async function trainEpoch(): Promise<void> {
   if (!net) return;
   if (trainStartedAt === 0) trainStartedAt = performance.now();
@@ -278,15 +282,26 @@ async function trainEpoch(): Promise<void> {
   const yieldToEventLoop = (): Promise<void> =>
     new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+  // Lightweight mid-epoch telemetry — updates tok/s gauge and sample counter
+  // on the main thread without waiting for the full epoch to complete.
+  const emitProgress = () => {
+    postMessage({
+      type: "progress",
+      tokensPerSecond: tokensPerSecond(),
+      trainedSamples,
+    });
+  };
+
   if (datasetWindowSets.length > 1) {
     // ── Interleaved multi-dataset path ────────────────────────────────────
+    // Steps per epoch = avg(numWindows_i) / contextSize → O(total / ctx).
     const totalInputs = datasetWindowSets.reduce(
       (acc, ds) => acc + ds.numWindows,
       0,
     );
     const avgSize = Math.max(
       1,
-      Math.ceil(totalInputs / datasetWindowSets.length),
+      Math.ceil(totalInputs / datasetWindowSets.length / contextSize),
     );
     let total = 0;
     let count = 0;
@@ -296,7 +311,6 @@ async function trainEpoch(): Promise<void> {
       for (const ds of datasetWindowSets) {
         if (ds.cursor >= ds.numWindows) reshuffleDataset(ds);
         const start = ds.order[ds.cursor++];
-        // On-the-fly window slice — allocated here, GC'd after trainStep.
         const ctx = new Array<number>(contextSize);
         for (let k = 0; k < contextSize; k++) ctx[k] = ds.ids[start + k];
         const tgt = ds.ids[start + contextSize];
@@ -308,6 +322,7 @@ async function trainEpoch(): Promise<void> {
         if (chunkCount >= CHUNK_SIZE) {
           chunkCount = 0;
           await yieldToEventLoop();
+          emitProgress();
           if (generation !== myGen || !net) return;
         }
       }
@@ -319,13 +334,16 @@ async function trainEpoch(): Promise<void> {
   } else {
     // ── Single-dataset path ───────────────────────────────────────────────
     if (numWindows === 0) return;
+
+    // Stride by contextSize: draw N/ctx randomly-selected non-overlapping
+    // windows per epoch instead of all N stride-1 windows.
+    const stepsPerEpoch = Math.max(1, Math.ceil(numWindows / contextSize));
     let total = 0;
     let chunkCount = 0;
 
-    for (let i = 0; i < numWindows; i++) {
+    for (let i = 0; i < stepsPerEpoch; i++) {
       if (cursor >= numWindows) shuffleOrder();
       const start = order[cursor++];
-      // On-the-fly window slice.
       const ctx = new Array<number>(contextSize);
       for (let k = 0; k < contextSize; k++) ctx[k] = corpusIds[start + k];
       const tgt = corpusIds[start + contextSize];
@@ -336,11 +354,12 @@ async function trainEpoch(): Promise<void> {
       if (chunkCount >= CHUNK_SIZE) {
         chunkCount = 0;
         await yieldToEventLoop();
+        emitProgress();
         if (generation !== myGen || !net) return;
       }
     }
 
-    const avg = total / numWindows;
+    const avg = total / stepsPerEpoch;
     lossEMA = epoch === 0 ? avg : lossEMA * 0.7 + avg * 0.3;
     epoch++;
   }

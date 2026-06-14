@@ -433,6 +433,15 @@ export default function App() {
             return next.length > 80 ? next.slice(-80) : next;
           });
         }
+      } else if (msg.type === "progress") {
+        // Lightweight mid-epoch telemetry — only updates live-ticking fields
+        // so the tok/s gauge and sample counter refresh every CHUNK_SIZE steps
+        // without waiting for the full epoch snapshot.
+        setTextSnap((prev) => ({
+          ...prev,
+          tokensPerSecond: msg.tokensPerSecond as number,
+          trainedSamples: msg.trainedSamples as number,
+        }));
       } else if (msg.type === "gpuStatus") {
         setWorkerGpuActive(msg.active === true);
       } else if (msg.type === "generation") {
