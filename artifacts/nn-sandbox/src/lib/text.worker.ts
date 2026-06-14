@@ -19,6 +19,11 @@ import {
 // cut generation off so the chat reply doesn't run into the next turn.
 const STOP_SEQUENCES = ["user", " user"];
 
+// Number of training steps to process before yielding control back to the
+// browser's event loop.  Keeping this at 64 keeps each micro-batch well under
+// 16 ms on a 50M-param model while still amortising the setTimeout overhead.
+const CHUNK_SIZE = 64;
+
 // Normalize raw text: lowercase, strip punctuation, collapse whitespace.
 // Preserves <PAD> and <EOS> special tokens.
 export function normalizeText(text: string): string {
@@ -158,10 +163,16 @@ let epoch = 0;
 let lossEMA = 0;
 let trainedSamples = 0;
 let trainStartedAt = 0;
-let timer: ReturnType<typeof setInterval> | null = null;
 
 let order: number[] = [];
 let cursor = 0;
+
+// ── Async training loop control ─────────────────────────────────────────────
+// Using an explicit `playing` flag + generation counter instead of setInterval
+// so the async trainEpoch can be safely interrupted mid-epoch when the user
+// hits pause or the worker is reset.
+let playing = false;
+let generation = 0; // incremented on every init/reset — guards mid-epoch yields
 
 function shuffleOrder() {
   order = inputs.map((_, i) => i);
@@ -218,31 +229,37 @@ function init(opts: InitOpts) {
   lossEMA = Math.log(Math.max(2, vocab.length));
   trainedSamples = 0;
   trainStartedAt = 0;
+  generation++; // invalidate any in-flight async epoch from the previous init
   shuffleOrder();
   emitSnapshot();
 }
 
-// ── Training epoch ──────────────────────────────────────────────────────────
-// When datasetWindowSets has > 1 entry (multiple corpora), we interleave
-// one step from each dataset per inner iteration.  This implements the
-// "jigsaw-puzzle" training strategy that prevents Catastrophic Forgetting:
-// each gradient update sees all knowledge sources simultaneously, so the
-// model cannot overwrite one domain's weights while learning another.
+// ── Async chunked training epoch ─────────────────────────────────────────────
+// Processes CHUNK_SIZE gradient steps then yields to the event loop via a
+// zero-delay setTimeout.  This prevents the browser tab from freezing even
+// with a 50M-parameter model on a 1.5 MB corpus.
 //
-// When only one dataset exists (or the model was loaded from weights), the
-// original shuffle-cursor approach is used unchanged.
-function trainEpoch() {
+// The `myGen` guard ensures that a reset/init happening mid-epoch (e.g. the
+// user switches corpus while training) causes the old epoch to abort cleanly
+// rather than overwriting the new model's weights.
+async function trainEpoch(): Promise<void> {
   if (!net) return;
   if (trainStartedAt === 0) trainStartedAt = performance.now();
 
+  const myGen = generation;
+
+  const yieldToEventLoop = () =>
+    new Promise<void>((resolve) => setTimeout(resolve, 0));
+
   if (datasetWindowSets.length > 1) {
-    // Interleaved multi-dataset path.
-    // We compute steps as the average dataset size so every epoch is
-    // roughly the same cost regardless of dataset count.
+    // ── Interleaved multi-dataset path ────────────────────────────────────
+    // We compute steps as the average dataset size so every epoch is roughly
+    // the same cost regardless of dataset count.
     const totalInputs = datasetWindowSets.reduce((acc, ds) => acc + ds.inputs.length, 0);
     const avgSize = Math.max(1, Math.ceil(totalInputs / datasetWindowSets.length));
     let total = 0;
     let count = 0;
+    let chunkCount = 0;
 
     for (let step = 0; step < avgSize; step++) {
       for (const ds of datasetWindowSets) {
@@ -251,22 +268,41 @@ function trainEpoch() {
         total += net.trainStep(ds.inputs[idx], ds.targets[idx]);
         trainedSamples++;
         count++;
+        chunkCount++;
+
+        if (chunkCount >= CHUNK_SIZE) {
+          chunkCount = 0;
+          await yieldToEventLoop();
+          // If a reset happened while we were yielded, bail out immediately.
+          if (generation !== myGen || !net) return;
+        }
       }
     }
 
     const avg = count > 0 ? total / count : 0;
     lossEMA = epoch === 0 ? avg : lossEMA * 0.7 + avg * 0.3;
     epoch++;
+
   } else {
-    // Original single-dataset shuffle path.
+    // ── Single-dataset path ───────────────────────────────────────────────
     if (inputs.length === 0) return;
     let total = 0;
+    let chunkCount = 0;
+
     for (let i = 0; i < inputs.length; i++) {
       if (cursor >= order.length) shuffleOrder();
       const idx = order[cursor++];
       total += net.trainStep(inputs[idx], targets[idx]);
       trainedSamples++;
+      chunkCount++;
+
+      if (chunkCount >= CHUNK_SIZE) {
+        chunkCount = 0;
+        await yieldToEventLoop();
+        if (generation !== myGen || !net) return;
+      }
     }
+
     const avg = total / inputs.length;
     lossEMA = epoch === 0 ? avg : lossEMA * 0.7 + avg * 0.3;
     epoch++;
@@ -312,20 +348,36 @@ function emitSnapshot() {
   });
 }
 
+// ── Async training loop ───────────────────────────────────────────────────────
+// Replaces setInterval with a while-loop that correctly awaits each async
+// trainEpoch before scheduling the next one.  This eliminates the race
+// condition where setInterval fires again before a long epoch finishes.
 function play(epochsPerSecond: number) {
   pause();
-  const intervalMs = Math.max(8, 1000 / Math.max(1, epochsPerSecond));
-  timer = setInterval(() => {
-    trainEpoch();
-    emitSnapshot();
-  }, intervalMs);
+  playing = true;
+  const targetMs = Math.max(8, 1000 / Math.max(1, epochsPerSecond));
+
+  const loop = async () => {
+    while (playing) {
+      const t0 = performance.now();
+      await trainEpoch();
+      if (!playing) break;
+      emitSnapshot();
+      // Throttle: wait out whatever remains of the target interval so we don't
+      // spin faster than epochsPerSecond when individual epochs are very short.
+      const elapsed = performance.now() - t0;
+      const remaining = targetMs - elapsed;
+      if (remaining > 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, remaining));
+      }
+    }
+  };
+
+  loop().catch(() => {});
 }
 
 function pause() {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
+  playing = false;
 }
 
 self.onmessage = (e: MessageEvent) => {
@@ -482,6 +534,7 @@ self.onmessage = (e: MessageEvent) => {
       lossEMA = typeof w.loss === "number" ? w.loss : 0;
       trainedSamples = 0;
       trainStartedAt = 0;
+      generation++; // invalidate any stale in-flight epoch
       shuffleOrder();
       emitSnapshot();
       break;

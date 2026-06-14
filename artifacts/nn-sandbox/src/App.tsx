@@ -1520,7 +1520,7 @@ export default function App() {
                         <label className="text-[11px] text-white/32 font-medium">Context Window</label>
                         <span className="text-[11px] tabular-nums text-white/58 font-mono">{llmConfig.contextSize}</span>
                       </div>
-                      <Slider min={1} max={30} step={1} value={[llmConfig.contextSize]} onValueChange={([v]) => setLLMConfig((c) => ({ ...c, contextSize: v }))} className="py-2" />
+                      <Slider min={1} max={512} step={1} value={[llmConfig.contextSize]} onValueChange={([v]) => setLLMConfig((c) => ({ ...c, contextSize: v }))} className="py-2" />
                     </div>
 
                     {/* Hidden Layers slider */}
