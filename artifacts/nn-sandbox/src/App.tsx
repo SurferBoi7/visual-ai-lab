@@ -1617,7 +1617,7 @@ export default function App() {
                         />
                         <SliderRow
                           label="Context Window" display={String(llmConfig.contextSize)}
-                          value={llmConfig.contextSize} min={1} max={30} step={1}
+                          value={llmConfig.contextSize} min={1} max={512} step={1}
                           onChange={(v) => setLLMConfig((c) => ({ ...c, contextSize: v }))}
                         />
                         <SliderRow
@@ -1866,6 +1866,70 @@ export default function App() {
                         sub="cross-entropy bits"
                         active={llmPlaying}
                       />
+                    </div>
+                  </div>
+
+                  {/* ─── Engine Throughput Gauge ────────────────────────────── */}
+                  <div className="shrink-0 px-4 pb-2">
+                    <div className="rounded-xl bg-[#060606] border border-white/[0.05] px-4 py-3">
+                      <div className="flex items-center justify-between mb-2.5">
+                        <div className="text-[9px] uppercase tracking-[0.14em] text-white/18 font-semibold flex items-center gap-1.5">
+                          <Activity className="size-3 shrink-0" />
+                          Engine Throughput
+                        </div>
+                        <div className="text-[9px] font-mono text-white/28">
+                          {textSnap.epoch > 0 && textSnap.tokensPerSecond > 0
+                            ? (() => {
+                                const sec = (textSnap.trainedSamples / textSnap.epoch) / textSnap.tokensPerSecond;
+                                return `~${sec < 60 ? `${sec.toFixed(1)}s` : `${(sec / 60).toFixed(1)}m`} / epoch`;
+                              })()
+                            : "est. epoch time: —"}
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[9px] text-white/20">tokens / sec</span>
+                          <span
+                            className="text-[11px] font-semibold font-mono tabular-nums"
+                            style={{
+                              color: textSnap.tokensPerSecond > 5000
+                                ? "#30D158"
+                                : textSnap.tokensPerSecond > 500
+                                  ? "#0A84FF"
+                                  : textSnap.tokensPerSecond > 0
+                                    ? "#FF9F0A"
+                                    : "rgba(255,255,255,0.18)",
+                            }}
+                          >
+                            {textSnap.tokensPerSecond > 0
+                              ? textSnap.tokensPerSecond > 1000
+                                ? `${(textSnap.tokensPerSecond / 1000).toFixed(1)}k`
+                                : String(Math.round(textSnap.tokensPerSecond))
+                              : "—"}
+                          </span>
+                        </div>
+                        <div className="h-2 rounded-full bg-white/[0.04] overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all duration-700 ease-out"
+                            style={{
+                              width: textSnap.tokensPerSecond > 0
+                                ? `${Math.min(100, (textSnap.tokensPerSecond / 20000) * 100)}%`
+                                : "0%",
+                              background: textSnap.tokensPerSecond > 5000
+                                ? "linear-gradient(90deg, #0A84FF, #30D158)"
+                                : textSnap.tokensPerSecond > 500
+                                  ? "#0A84FF"
+                                  : "#FF9F0A",
+                            }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-[8px] font-mono text-white/12 pt-0.5">
+                          <span>0</span>
+                          <span>5k</span>
+                          <span>10k</span>
+                          <span>20k</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
 

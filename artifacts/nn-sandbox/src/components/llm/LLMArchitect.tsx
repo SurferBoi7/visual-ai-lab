@@ -300,7 +300,7 @@ export function LLMArchitect({
               <span className="text-[11px] text-white/35 font-medium">Context Window</span>
               <span className="text-[11px] tabular-nums text-white/65 font-mono">{config.contextSize} {tokenLabel}</span>
             </div>
-            <Slider min={1} max={20} step={1} value={[config.contextSize]} onValueChange={([v]) => onChange({ ...config, contextSize: v })} className="py-2" />
+            <Slider min={1} max={512} step={1} value={[config.contextSize]} onValueChange={([v]) => onChange({ ...config, contextSize: v })} className="py-2" />
           </div>
 
           {/* Hidden Neurons */}
