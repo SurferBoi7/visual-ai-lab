@@ -282,13 +282,23 @@ async function trainEpoch(): Promise<void> {
   const yieldToEventLoop = (): Promise<void> =>
     new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-  // Lightweight mid-epoch telemetry — updates tok/s gauge and sample counter
-  // on the main thread without waiting for the full epoch to complete.
+  // Running loss accumulator for mid-epoch telemetry.
+  // Tracks only finite step losses so NaN from degenerate batches can't
+  // contaminate the running average that emitProgress shows in the UI.
+  let epochTotal = 0;
+  let epochSteps = 0;
+
+  // Emits a lightweight progress frame every CHUNK_SIZE steps.
+  // Now includes the running loss and last-completed epoch count so the
+  // Loss, Perplexity, and Epoch cards refresh during long epochs (e.g. word
+  // tokenization with small contextSize) rather than waiting for epoch end.
   const emitProgress = () => {
     postMessage({
       type: "progress",
       tokensPerSecond: tokensPerSecond(),
       trainedSamples,
+      loss: epochSteps > 0 ? epochTotal / epochSteps : lossEMA,
+      epoch,
     });
   };
 
@@ -314,7 +324,9 @@ async function trainEpoch(): Promise<void> {
         const ctx = new Array<number>(contextSize);
         for (let k = 0; k < contextSize; k++) ctx[k] = ds.ids[start + k];
         const tgt = ds.ids[start + contextSize];
-        total += net.trainStep(ctx, tgt);
+        const stepLoss = net.trainStep(ctx, tgt);
+        total += stepLoss;
+        if (Number.isFinite(stepLoss)) { epochTotal += stepLoss; epochSteps++; }
         trainedSamples++;
         count++;
         chunkCount++;
@@ -328,8 +340,11 @@ async function trainEpoch(): Promise<void> {
       }
     }
 
-    const avg = count > 0 ? total / count : 0;
+    // Use the NaN-safe running average; fall back to previous lossEMA if no
+    // finite steps were recorded (degenerate epoch).
+    const avg = epochSteps > 0 ? epochTotal / epochSteps : lossEMA;
     lossEMA = epoch === 0 ? avg : lossEMA * 0.7 + avg * 0.3;
+    if (!Number.isFinite(lossEMA)) lossEMA = Math.log(Math.max(2, vocab.length));
     epoch++;
   } else {
     // ── Single-dataset path ───────────────────────────────────────────────
@@ -347,7 +362,9 @@ async function trainEpoch(): Promise<void> {
       const ctx = new Array<number>(contextSize);
       for (let k = 0; k < contextSize; k++) ctx[k] = corpusIds[start + k];
       const tgt = corpusIds[start + contextSize];
-      total += net.trainStep(ctx, tgt);
+      const stepLoss = net.trainStep(ctx, tgt);
+      total += stepLoss;
+      if (Number.isFinite(stepLoss)) { epochTotal += stepLoss; epochSteps++; }
       trainedSamples++;
       chunkCount++;
 
@@ -359,8 +376,10 @@ async function trainEpoch(): Promise<void> {
       }
     }
 
-    const avg = total / stepsPerEpoch;
+    // NaN-safe epoch average.
+    const avg = epochSteps > 0 ? epochTotal / epochSteps : lossEMA;
     lossEMA = epoch === 0 ? avg : lossEMA * 0.7 + avg * 0.3;
+    if (!Number.isFinite(lossEMA)) lossEMA = Math.log(Math.max(2, vocab.length));
     epoch++;
   }
 }
@@ -390,6 +409,10 @@ function tokensPerSecond(): number {
 
 function emitSnapshot() {
   if (!net) return;
+  // Wrap makeSample in try/catch so a generation error (e.g. degenerate
+  // probs during word-mode warm-up) cannot silently kill the play() loop.
+  let sample = "";
+  try { sample = makeSample(32); } catch { sample = ""; }
   postMessage({
     type: "snapshot",
     epoch,
@@ -398,7 +421,7 @@ function emitSnapshot() {
     vocabSize: vocab.length,
     contextSize: net.config.contextSize,
     hiddenSize: net.config.hiddenSize,
-    sample: makeSample(32),
+    sample,
     tokensPerSecond: tokensPerSecond(),
     trainedSamples,
   });

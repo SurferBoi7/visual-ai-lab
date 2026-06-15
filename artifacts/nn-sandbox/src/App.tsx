@@ -434,13 +434,19 @@ export default function App() {
           });
         }
       } else if (msg.type === "progress") {
-        // Lightweight mid-epoch telemetry — only updates live-ticking fields
-        // so the tok/s gauge and sample counter refresh every CHUNK_SIZE steps
-        // without waiting for the full epoch snapshot.
+        // Mid-epoch telemetry frame — fires every CHUNK_SIZE steps so Loss,
+        // Perplexity, Epoch, and Throughput cards all stay alive during long
+        // epochs (word tokenization with small contextSize can take minutes).
+        // Uses a running average loss so the value is always meaningful, and
+        // falls back to spreading previous state for any missing fields.
         setTextSnap((prev) => ({
           ...prev,
           tokensPerSecond: msg.tokensPerSecond as number,
           trainedSamples: msg.trainedSamples as number,
+          ...(typeof msg.loss === "number" && Number.isFinite(msg.loss) && msg.loss > 0
+            ? { loss: msg.loss as number }
+            : {}),
+          ...(typeof msg.epoch === "number" ? { epoch: msg.epoch as number } : {}),
         }));
       } else if (msg.type === "gpuStatus") {
         setWorkerGpuActive(msg.active === true);
